@@ -130,6 +130,97 @@ def repair_postgres_numeric_casts(sql: str) -> str:
     return ''.join(result)
 
 
+def repair_categorical_casing(sql: str, categorical_samples: dict[str, list[str]]) -> str:
+    """
+    Repair case-sensitivity mismatches in SQL string literals by matching them
+    against observed distinct categorical values in the target dataset.
+    Completely generic: operates dynamically on any categorical samples.
+    """
+    if not sql or not categorical_samples:
+        return sql
+
+    lower_map = {}
+    colliding = set()
+    for col, vals in categorical_samples.items():
+        for v in vals:
+            v_str = str(v)
+            v_low = v_str.lower()
+            if v_low in lower_map and lower_map[v_low] != v_str:
+                colliding.add(v_low)
+            else:
+                lower_map[v_low] = v_str
+
+    for c in colliding:
+        lower_map.pop(c, None)
+
+    if not lower_map:
+        return sql
+
+    def replace_literal(match):
+        raw_inner = match.group(1)
+        unescaped = raw_inner.replace("''", "'")
+        unescaped_low = unescaped.lower()
+        if unescaped_low in lower_map:
+            exact_val = lower_map[unescaped_low]
+            escaped_exact = exact_val.replace("'", "''")
+            return f"'{escaped_exact}'"
+        return match.group(0)
+
+    return re.sub(r"'((?:''|[^'])*)'", replace_literal, sql)
+
+
+def detect_casing_mismatch(sql: str, table_name: str, schema: str = "uploads") -> tuple[bool, str, str | None]:
+    """
+    Detect whether a query returned 0 rows due to case-sensitivity mismatch on categorical columns.
+    Checks string literals in query filters against observed distinct values in PostgreSQL.
+    Returns:
+        (detected: bool, explanation: str, corrected_sql: str | None)
+    """
+    if not sql or not table_name:
+        return False, "", None
+
+    from dashboard.upload_engine import get_categorical_column_samples
+    categorical_samples = get_categorical_column_samples(table_name, schema=schema)
+    if not categorical_samples:
+        return False, "", None
+
+    raw_literals = re.findall(r"'((?:''|[^'])*)'", sql)
+    mismatches = []
+    
+    lower_map = {}
+    col_map = {}
+    for col, vals in categorical_samples.items():
+        for v in vals:
+            v_str = str(v)
+            v_low = v_str.lower()
+            lower_map[v_low] = v_str
+            col_map[v_low] = col
+
+    for raw_lit in raw_literals:
+        lit = raw_lit.replace("''", "'")
+        lit_low = lit.lower()
+        if lit_low in lower_map and lit != lower_map[lit_low]:
+            mismatches.append((lit, lower_map[lit_low], col_map[lit_low]))
+
+    if not mismatches:
+        return False, "", None
+
+    unique_mismatches = []
+    seen = set()
+    for query_val, db_val, col in mismatches:
+        if (query_val, db_val) not in seen:
+            seen.add((query_val, db_val))
+            unique_mismatches.append(f"column `{col}`: filtered on `'{query_val}'` vs observed value `'{db_val}'`")
+
+    explanation = (
+        f"PostgreSQL categorical string comparisons are strictly case-sensitive. "
+        f"The query returned 0 rows because the filter casing did not match the dataset: "
+        + "; ".join(unique_mismatches) + "."
+    )
+    corrected_sql = repair_categorical_casing(sql, categorical_samples)
+    return True, explanation, corrected_sql
+
+
 import sqlparse
 
 
@@ -209,18 +300,34 @@ def validate_with_postgres_explain(sql: str) -> tuple[bool, str]:
     cleaned = sql.strip().rstrip(";")
     explain_query = f"EXPLAIN (FORMAT TEXT) {cleaned};"
 
-    try:
-        engine = get_readonly_engine()
-        with engine.connect() as conn:
-            conn.execute(text(explain_query))
-        return True, "PostgreSQL query plan verified successfully."
-    except Exception as ex:
-        raw_msg = str(ex)
-        # Sanitize any passwords or URIs
-        sanitized = re.sub(r"://[^@]+@", "://***:***@", raw_msg)
-        lines = [line.strip() for line in sanitized.splitlines() if line.strip()]
-        error_line = lines[0] if lines else "Syntax or catalog verification error."
-        return False, f"PostgreSQL Planner Error: {error_line}"
+    engine = get_readonly_engine()
+    for attempt in range(2):
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(explain_query))
+            return True, "PostgreSQL query plan verified successfully."
+        except Exception as ex:
+            raw_msg = str(ex)
+            is_ssl_disconnect = (
+                "SSL connection has been closed unexpectedly" in raw_msg
+                or "server closed the connection unexpectedly" in raw_msg
+                or "terminating connection due to administrator command" in raw_msg
+                or "connection already closed" in raw_msg
+                or "could not receive data from server" in raw_msg
+            )
+            if is_ssl_disconnect and attempt == 0:
+                # Dispose stale pooled connections and retry with fresh connection
+                try:
+                    engine.dispose()
+                except Exception:
+                    pass
+                continue
+
+            # Sanitize any passwords or URIs
+            sanitized = re.sub(r"://[^@]+@", "://***:***@", raw_msg)
+            lines = [line.strip() for line in sanitized.splitlines() if line.strip()]
+            error_line = lines[0] if lines else "Syntax or catalog verification error."
+            return False, f"PostgreSQL Planner Error: {error_line}"
 
 
 def execute_approved_sql(sql: str, max_rows: int = 500) -> dict:
@@ -294,6 +401,10 @@ def get_dataset_schema_context(dataset_choice: str) -> dict:
         return {
             "dataset_name": "BankScope Core Banking Warehouse (public)",
             "context_string": CORE_BANKING_SCHEMA_SUMMARY,
+            "categorical_samples": {
+                "card_type": ["Credit", "Debit"],
+                "account_type": ["Checking", "Savings", "Business"],
+            },
             "tables": [
                 {"table_name": "customers", "schema": "public", "columns": "customer_id, first_name, last_name, email, city, credit_score, created_at"},
                 {"table_name": "accounts", "schema": "public", "columns": "account_id, customer_id, account_type, balance_usd, open_date"},
@@ -310,7 +421,7 @@ def get_dataset_schema_context(dataset_choice: str) -> dict:
     if not re.match(r"^[a-zA-Z0-9_]+$", table_name):
         raise ValueError("Invalid table identifier.")
         
-    from dashboard.upload_engine import table_exists_in_db
+    from dashboard.upload_engine import table_exists_in_db, get_categorical_column_samples
     if not table_exists_in_db(table_name, "uploads"):
         raise FileNotFoundError(f"Target table 'uploads.{table_name}' does not exist in PostgreSQL. Please re-upload your dataset.")
         
@@ -322,6 +433,8 @@ def get_dataset_schema_context(dataset_choice: str) -> dict:
         WHERE table_schema = 'uploads' AND table_name = :table_name
         ORDER BY ordinal_position;
     """
+    
+    categorical_samples = get_categorical_column_samples(table_name, "uploads")
     
     try:
         with engine.connect() as conn:
@@ -336,7 +449,13 @@ def get_dataset_schema_context(dataset_choice: str) -> dict:
         
     cols_desc = []
     for _, r in df_cols.iterrows():
-        cols_desc.append(f"   - `{r['column_name']}` ({r['data_type']})")
+        c_name = r['column_name']
+        c_type = r['data_type']
+        if c_name in categorical_samples and categorical_samples[c_name]:
+            vals_fmt = ", ".join([f"'{v}'" for v in categorical_samples[c_name]])
+            cols_desc.append(f"   - `{c_name}` ({c_type}) [Observed distinct values: {vals_fmt}]")
+        else:
+            cols_desc.append(f"   - `{c_name}` ({c_type})")
         
     cols_str = "\n".join(cols_desc) if cols_desc else "   - (No columns found)"
     
@@ -346,10 +465,16 @@ def get_dataset_schema_context(dataset_choice: str) -> dict:
 {cols_str}
 
 Important: Always reference this table with schema qualification: `uploads.{table_name}`.
+
+CRITICAL POSTGRESQL CASE-SENSITIVITY RULES:
+- PostgreSQL string comparisons (e.g. WHERE col = 'val', col IN ('val1', 'val2'), LIKE) are STRICTLY CASE-SENSITIVE.
+- Always use the EXACT observed categorical values shown above with exact casing (e.g., if a column has 'Credit' and 'Debit', you MUST write 'Credit' and 'Debit', NEVER lowercase 'credit' or 'debit'). Do not invent or alter casing.
+- If filtering high-cardinality text where exact observed values are not listed, use LOWER(column) = 'value' or ILIKE when appropriate.
 """
     return {
         "dataset_name": f"Uploaded Dataset (uploads.{table_name})",
         "context_string": context_str,
+        "categorical_samples": categorical_samples,
         "tables": [
             {
                 "table_name": table_name,
@@ -364,10 +489,10 @@ Important: Always reference this table with schema qualification: `uploads.{tabl
 def generate_sql_query(question: str, dataset_choice: str, provider: BaseLLMProvider = None) -> dict:
     """
     End-to-end SQL generation:
-    1. Resolve schema context (validates physical table existence).
-    2. Format prompt and system rules (instructing ::numeric casts on AVG/SUM/ROUND).
+    1. Resolve schema context (validates physical table existence and exposes observed categorical values).
+    2. Format prompt and system rules (instructing ::numeric casts and strict casing preservation).
     3. Invoke LLM provider (Groq primary / fallback).
-    4. Clean output and repair numeric casts.
+    4. Clean output, repair categorical casing against observed values, and repair numeric casts.
     5. Enforce static security validation.
     Returns result dict with SQL, validation status, and metadata.
     """
@@ -395,8 +520,12 @@ Strict Rules:
      Example: ROUND(AVG(col)::numeric, 2), ROUND(SUM(col)::numeric, 2), ROUND((val * 100.0 / total)::numeric, 2).
      NEVER write ROUND(AVG(col), 2) because round(double precision, integer) does not exist in PostgreSQL!
    - For string concatenation: first_name || ' ' || last_name
-4. Do NOT hallucinate tables or columns not present in the provided schema.
-5. If tables from the uploads schema are used, qualify them explicitly with `uploads.<table_name>`.
+4. Case Sensitivity in PostgreSQL:
+   - String comparisons (WHERE col = 'val', WHERE col IN ('v1', 'v2'), LIKE) are STRICTLY CASE-SENSITIVE in PostgreSQL!
+   - When filtering on categorical columns, ALWAYS use the EXACT observed categorical values provided in the schema (e.g., if the column has 'Credit' and 'Debit', you MUST write 'Credit' and 'Debit', NEVER lowercase 'credit' or 'debit').
+   - If filtering arbitrary high-cardinality text where exact casing is unknown, use LOWER(column) = 'value' or ILIKE when appropriate.
+5. Do NOT hallucinate tables or columns not present in the provided schema.
+6. If tables from the uploads schema are used, qualify them explicitly with `uploads.<table_name>`.
 
 {schema_info['context_string']}
 """
@@ -416,7 +545,9 @@ Strict Rules:
             raise api_err
 
     clean_query = clean_sql(raw_response)
-    repaired_query = repair_postgres_numeric_casts(clean_query)
+    # Generic, non-hardcoded categorical casing repair against observed schema values
+    repaired_casing = repair_categorical_casing(clean_query, schema_info.get("categorical_samples", {}))
+    repaired_query = repair_postgres_numeric_casts(repaired_casing)
     is_valid, validation_msg = validate_sql_security(repaired_query)
     
     return {
@@ -424,6 +555,7 @@ Strict Rules:
         "dataset_choice": dataset_choice,
         "dataset_name": schema_info["dataset_name"],
         "schema_context": schema_info["context_string"],
+        "categorical_samples": schema_info.get("categorical_samples", {}),
         "provider_name": provider_name,
         "raw_response": raw_response,
         "sql": repaired_query,

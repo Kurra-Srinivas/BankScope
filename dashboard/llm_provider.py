@@ -270,12 +270,14 @@ class OfflineBankingSQLProvider(BaseLLMProvider):
                     f"ORDER BY total_monthly_spend DESC;"
                 )
             elif "utilization" in q_lower:
+                where_clause = "WHERE card_type IN ('Credit', 'Debit')\n" if ("credit" in q_lower or "debit" in q_lower) else ""
                 return (
                     f"SELECT \n"
                     f"    card_type,\n"
                     f"    COUNT(*) AS count,\n"
                     f"    ROUND(AVG(utilization_pct)::numeric, 4) AS avg_utilization_pct\n"
                     f"FROM {target_tbl}\n"
+                    f"{where_clause}"
                     f"GROUP BY card_type\n"
                     f"ORDER BY avg_utilization_pct DESC;"
                 )

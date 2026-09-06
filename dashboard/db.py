@@ -103,9 +103,23 @@ def get_engine():
     encoded_password = urllib.parse.quote_plus(creds["password"])
     url = f"postgresql+psycopg2://{creds['user']}:{encoded_password}@{creds['host']}:{creds['port']}/{creds['database']}"
     
-    engine_kwargs = {"pool_size": 5, "max_overflow": 10}
+    connect_args = {
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 5,
+    }
     if creds.get("sslmode"):
-        engine_kwargs["connect_args"] = {"sslmode": creds["sslmode"]}
+        connect_args["sslmode"] = creds["sslmode"]
+
+    engine_kwargs = {
+        "pool_size": 5,
+        "max_overflow": 10,
+        "pool_pre_ping": True,
+        "pool_recycle": 300,
+        "pool_timeout": 30,
+        "connect_args": connect_args,
+    }
 
     return create_engine(url, **engine_kwargs)
 
@@ -123,25 +137,55 @@ def get_readonly_engine():
     url = f"postgresql+psycopg2://{creds['user']}:{encoded_password}@{creds['host']}:{creds['port']}/{creds['database']}"
     
     connect_args = {
-        "options": "-c default_transaction_read_only=on -c statement_timeout=10000"
+        "options": "-c default_transaction_read_only=on -c statement_timeout=10000",
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 5,
     }
     if creds.get("sslmode"):
         connect_args["sslmode"] = creds["sslmode"]
 
-    return create_engine(url, pool_size=3, max_overflow=5, connect_args=connect_args)
+    return create_engine(
+        url,
+        pool_size=3,
+        max_overflow=5,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        pool_timeout=30,
+        connect_args=connect_args,
+    )
 
 
 @st.cache_data(ttl=600, show_spinner=False)
 def execute_query(sql: str, params=None) -> pd.DataFrame:
     """Execute a parameterized SQL query and return results as a Pandas DataFrame."""
     engine = get_engine()
-    with engine.connect() as conn:
-        if params is not None:
-            # Handle tuple/dict parameters
-            df = pd.read_sql_query(sql, conn.connection, params=params)
-        else:
-            df = pd.read_sql_query(sql, conn.connection)
-    return df
+    for attempt in range(2):
+        try:
+            with engine.connect() as conn:
+                if params is not None:
+                    # Handle tuple/dict parameters
+                    df = pd.read_sql_query(text(sql), conn, params=params)
+                else:
+                    df = pd.read_sql_query(text(sql), conn)
+            return df
+        except Exception as e:
+            raw_err = str(e)
+            is_ssl_disconnect = (
+                "SSL connection has been closed unexpectedly" in raw_err
+                or "server closed the connection unexpectedly" in raw_err
+                or "terminating connection due to administrator command" in raw_err
+                or "connection already closed" in raw_err
+                or "could not receive data from server" in raw_err
+            )
+            if is_ssl_disconnect and attempt == 0:
+                try:
+                    engine.dispose()
+                except Exception:
+                    pass
+                continue
+            raise e
 
 
 def execute_readonly_query(sql: str, max_rows: int = 500) -> tuple[pd.DataFrame, float, str | None]:
@@ -169,19 +213,35 @@ def execute_readonly_query(sql: str, max_rows: int = 500) -> tuple[pd.DataFrame,
     engine = get_readonly_engine()
     start_time = time.perf_counter()
 
-    try:
-        with engine.connect() as conn:
-            df = pd.read_sql_query(limited_sql, conn.connection)
-            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            return df, elapsed_ms, None
-    except Exception as e:
-        elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-        raw_err = str(e)
+    for attempt in range(2):
+        try:
+            with engine.connect() as conn:
+                df = pd.read_sql_query(text(limited_sql), conn)
+                elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                return df, elapsed_ms, None
+        except Exception as e:
+            raw_err = str(e)
+            is_ssl_disconnect = (
+                "SSL connection has been closed unexpectedly" in raw_err
+                or "server closed the connection unexpectedly" in raw_err
+                or "terminating connection due to administrator command" in raw_err
+                or "connection already closed" in raw_err
+                or "could not receive data from server" in raw_err
+            )
+            if is_ssl_disconnect and attempt == 0:
+                # Safely dispose stale pooled connections and retry with fresh connection
+                try:
+                    engine.dispose()
+                except Exception:
+                    pass
+                continue
 
-        # Sanitize any passwords, hosts, or connection URIs
-        sanitized = re.sub(r"://[^@]+@", "://***:***@", raw_err)
-        sanitized = re.sub(r"password='[^']*'", "password='***'", sanitized, flags=re.IGNORECASE)
-        sanitized = re.sub(r"password=[^\s;]+", "password=***", sanitized, flags=re.IGNORECASE)
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
+            # Sanitize any passwords, hosts, or connection URIs
+            sanitized = re.sub(r"://[^@]+@", "://***:***@", raw_err)
+            sanitized = re.sub(r"password='[^']*'", "password='***'", sanitized, flags=re.IGNORECASE)
+            sanitized = re.sub(r"password=[^\s;]+", "password=***", sanitized, flags=re.IGNORECASE)
 
         # User-friendly explanation for common database security errors
         if "ReadOnlySqlTransaction" in sanitized or "read-only transaction" in sanitized:

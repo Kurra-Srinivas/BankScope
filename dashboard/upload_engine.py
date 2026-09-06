@@ -387,3 +387,44 @@ def delete_uploaded_table(table_name: str) -> bool:
             {"table_name": table_name}
         )
     return True
+
+
+def get_categorical_column_samples(table_name: str, schema: str = UPLOAD_SCHEMA, max_distinct: int = 20) -> dict[str, list[str]]:
+    """
+    Safely sample distinct values for low-cardinality categorical/text columns in a table.
+    Enables schema context and NL-SQL generation to observe exact PostgreSQL casing.
+    Returns:
+        {column_name: [val1, val2, ...], ...}
+    where distinct count <= max_distinct.
+    """
+    if not table_name or not re.match(r"^[a-zA-Z0-9_]+$", table_name) or not re.match(r"^[a-zA-Z0-9_]+$", schema):
+        return {}
+    if not table_exists_in_db(table_name, schema):
+        return {}
+
+    engine = get_engine()
+    find_cols_query = """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = :schema 
+          AND table_name = :table_name
+          AND data_type IN ('character varying', 'varchar', 'text', 'character', 'bpchar')
+        ORDER BY ordinal_position;
+    """
+
+    samples = {}
+    try:
+        with engine.connect() as conn:
+            text_cols = conn.execute(text(find_cols_query), {"schema": schema, "table_name": table_name}).scalars().all()
+            for col in text_cols:
+                if not re.match(r"^[a-zA-Z0-9_]+$", col):
+                    continue
+                # Fetch up to max_distinct + 1 distinct non-null values
+                query = f'SELECT DISTINCT "{col}" FROM "{schema}"."{table_name}" WHERE "{col}" IS NOT NULL AND TRIM(CAST("{col}" AS text)) != \'\' LIMIT :limit;'
+                vals = conn.execute(text(query), {"limit": max_distinct + 1}).scalars().all()
+                if 1 <= len(vals) <= max_distinct:
+                    samples[col] = sorted([str(v) for v in vals])
+    except Exception:
+        return {}
+
+    return samples

@@ -42,6 +42,7 @@ from dashboard.sql_generator import (
     validate_sql_security,
     validate_with_postgres_explain,
     execute_approved_sql,
+    detect_casing_mismatch,
 )
 from dashboard.sql_visualizer import generate_result_visualization
 from dashboard.llm_provider import (
@@ -1079,6 +1080,19 @@ elif section == "7. Ask Your Data":
                 df_res = exec_res["df"]
                 if df_res.empty:
                     st.info("ℹ️ Query executed successfully but returned 0 rows.")
+                    # PART 2: Zero-Row Semantic Guard
+                    if selected_dataset.startswith("upload:"):
+                        target_tbl = selected_dataset.replace("upload:", "").strip()
+                        has_mismatch, explanation, corrected_sql = detect_casing_mismatch(edited_sql, target_tbl, schema="uploads")
+                        if has_mismatch and corrected_sql and corrected_sql.strip() != edited_sql.strip():
+                            st.warning(f"🔍 **Zero-Row Semantic Guard**: {explanation}")
+                            st.markdown("**Corrected SQL using observed dataset casing:**")
+                            st.code(corrected_sql, language="sql")
+                            if st.button("📝 Load Corrected SQL into Editor & Review", key="load_corrected_sql_btn", type="primary"):
+                                st.session_state["sql_editor_area"] = corrected_sql
+                                st.session_state["edited_sql"] = corrected_sql
+                                st.session_state.pop("nl_exec_result", None)
+                                st.rerun()
                 else:
                     # Dynamic Plotly Visualization
                     fig = generate_result_visualization(df_res)
