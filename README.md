@@ -123,39 +123,6 @@ Benchmarks were evaluated over **20 alternating runs per state** (Unindexed vs. 
 
 ---
 
-## Quick Start
-
-### 1. Setup Environment
-```bash
-git clone https://github.com/Kurra-Srinivas/BankScope.git
-cd BankScope
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### 2. Configure Database Credentials
-Create `.env` using `.env.example`:
-```ini
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=bankscope_db
-DB_USER=postgres
-DB_PASSWORD=your_password_here
-```
-
-### 3. Run Validation & Launch Dashboard
-```bash
-# Verify PostgreSQL integrity (100% parity across all 7 tables)
-python scripts/validate_postgres.py
-
-# Launch interactive Streamlit dashboard
-streamlit run dashboard/app.py
-```
-Dashboard opens automatically at `http://localhost:8501`.
-
----
-
 ## In-Depth Documentation
 
 * [Database Schema & ER Specification](docs/database_schema.md): Complete Mermaid ER diagram, table constraints, and DDL.
