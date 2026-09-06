@@ -13,6 +13,20 @@ BankScope pairs production-grade analytical SQL engineering with audited composi
 
 ---
 
+## Key Features
+
+* **⚡ Pure In-Database Analytics**: Zero in-memory dataframe bottlenecks; all aggregations, window rankings, and multi-table joins execute directly in PostgreSQL 18 across 1.26M+ canonical banking records ($5B volume, $7.5B deposits).
+* **🔍 Audited SQL Optimization**: Empirical benchmarks using `EXPLAIN (ANALYZE, BUFFERS)` verifying a **99.85% buffer read reduction** (from 12,376 to 18 blocks) and up to **120x execution speedups**.
+* **📊 Behavioral RFM Segmentation**: 7-tier customer clustering (Champions, Loyal, At-Risk, etc.) scoring 38,849 transacting clients with NTILE statistical distributions.
+* **📁 Isolated CSV Upload & Profiling**: Drag-and-drop CSV exploration (up to 50 MB) persisted into an isolated PostgreSQL `uploads` schema with automated data profiling, duplicate detection, and strict session isolation.
+* **🤖 Human-in-the-Loop NL-to-SQL Engine**: Natural language querying powered by **Groq AI (`openai/gpt-oss-20b`)** with dynamic schema injection, observed categorical casing preservation, and rule-based offline fallback.
+* **🛡️ Multi-Tier Security Guardrails**: Protocol-level read-only transactions (`default_transaction_read_only=on`), single-statement validation (`sqlparse`), 10-second statement timeouts, pre-execution PostgreSQL `EXPLAIN` query planning, and mandatory **"Approve & Run"** user authorization.
+* **🔄 Zero-Row Semantic Casing Guard**: Automatically detects case-sensitivity mismatches on PostgreSQL string literals, diagnoses discrepancies against observed data, and proposes corrected SQL with human review.
+* **📈 Semantic Plotly Visualizations**: Intelligent, deterministic chart selection—rendering dual-axis grouped bar charts for multi-scale comparisons, vertical/horizontal bar charts for category metrics, time-series lines, and composition donuts.
+* **🌐 Enterprise Cloud & SSL Resilience**: Production connection pooling with `pool_pre_ping=True`, 5-minute pool recycling, and automatic reconnection on dropped serverless SSL sockets.
+
+---
+
 ## System at a Glance
 
 | Domain | Scale & Empirical Metrics | Key Analytical Insight |
@@ -68,11 +82,12 @@ Upload ad-hoc CSV datasets (up to 50 MB) into an isolated PostgreSQL `uploads` s
 
 ### 7. "Ask Your Data" — Human-in-the-Loop NL-SQL Engine
 Query core banking warehouse tables or custom uploaded datasets in plain English. Powered primarily by **Groq AI (`openai/gpt-oss-20b`)** with an automatic offline rule-based demo engine fallback:
-* **Dynamic Schema Injection**: Builds real-time schema context including table definitions, row counts, and foreign key relationships.
+* **Dynamic Schema Injection & Categorical Casing**: Builds real-time schema context including table definitions, row counts, relationships, and observed distinct values for text columns to preserve case-sensitive PostgreSQL comparisons.
 * **Strict Security Guardrails**: Enforces single-statement read-only execution (`SELECT` or `WITH`). Actively rejects DML (`INSERT`, `UPDATE`, `DELETE`), DDL (`DROP`, `ALTER`, `CREATE`), administrative commands (`GRANT`, `VACUUM`), and multi-statement injection.
 * **Pre-Execution PostgreSQL EXPLAIN**: Validates query plans, column references, and syntax against PostgreSQL before execution.
 * **Human-in-the-Loop Governed Approval**: Queries are never executed automatically. Users inspect and edit generated SQL in an interactive code editor before explicitly clicking **"Approve & Run"**.
-* **Isolated Read-Only Execution**: Executes on a dedicated read-only PostgreSQL connection with an enforced 10-second statement timeout and 1,000-row limit, generating interactive Plotly visualizations.
+* **Zero-Row Semantic Casing Guard**: Detects if an executed query returned 0 rows due to case-sensitivity mismatches, displays an explanation, and provides one-click corrected SQL loading for user review.
+* **Isolated Read-Only Execution & Semantic Visualizations**: Executes on a dedicated read-only PostgreSQL connection with an enforced 10-second statement timeout, automatically rendering dark-themed Plotly charts (dual-axis grouped bars for multi-scale metrics, vertical/horizontal bars, time-series lines, and composition donuts).
 
 ---
 
