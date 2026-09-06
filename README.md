@@ -1,8 +1,16 @@
-# BankScope: Enterprise Banking Analytics & SQL Performance Engine
+# BankScope: Enterprise Banking Analytics & Human-in-the-Loop NL-SQL
 
-An end-to-end banking intelligence platform and relational data warehouse built on **PostgreSQL 18**, **Streamlit**, and **Plotly**—modeling **1.26 million ledger records**, **$5.00B in transaction volume**, and **$7.49B in customer deposits**.
+[![Production CI & Deployment Verification](https://github.com/Kurra-Srinivas/BankScope/actions/workflows/production.yml/badge.svg)](https://github.com/Kurra-Srinivas/BankScope/actions/workflows/production.yml)
+[![Production Environment](https://img.shields.io/github/deployments/Kurra-Srinivas/BankScope/production?label=Production&logo=github)](https://github.com/Kurra-Srinivas/BankScope/deployments/production)
+[![Streamlit App](https://img.shields.io/badge/Streamlit-Live%20Demo-FF4B4B?logo=streamlit&logoColor=white)](https://share.streamlit.io/)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![PostgreSQL 18](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 
-BankScope pairs production-grade analytical SQL engineering with audited index optimization and interactive portfolio business intelligence.
+> **Live Demo:** `https://share.streamlit.io/kurra-srinivas/bankscope/main/dashboard/app.py` *(Streamlit Community Cloud)*
+
+An end-to-end banking intelligence platform, relational data warehouse, and human-in-the-loop NL-to-SQL engine built on **PostgreSQL 18 (Neon Cloud)**, **Groq AI (`openai/gpt-oss-20b`)**, **Streamlit**, and **Plotly**—modeling **1.26 million ledger records**, **$5.00B in transaction volume**, and **$7.49B in customer deposits**.
+
+BankScope pairs production-grade analytical SQL engineering with audited composite index optimization, session-isolated CSV data exploration, and governed natural-language SQL generation with human approval.
 
 ---
 
@@ -56,6 +64,17 @@ Capital exposure across APR risk tiers, annual origination trends, and credit sc
 Empirical `EXPLAIN (ANALYZE, BUFFERS)` execution latency and physical buffer page reduction displays.
 ![SQL Performance Benchmarks](docs/screenshots/05_sql_performance.png)
 
+### 6. Custom CSV Upload & Profiling
+Upload ad-hoc CSV datasets (up to 50 MB) into an isolated PostgreSQL `uploads` schema. Generates automated column profiling, missing value distributions, duplicate audits, and numeric summary statistics. All uploads are strictly session-scoped with zero cross-tenant visibility and complete deletion control.
+
+### 7. "Ask Your Data" — Human-in-the-Loop NL-SQL Engine
+Query core banking warehouse tables or custom uploaded datasets in plain English. Powered primarily by **Groq AI (`openai/gpt-oss-20b`)** with an automatic offline rule-based demo engine fallback:
+* **Dynamic Schema Injection**: Builds real-time schema context including table definitions, row counts, and foreign key relationships.
+* **Strict Security Guardrails**: Enforces single-statement read-only execution (`SELECT` or `WITH`). Actively rejects DML (`INSERT`, `UPDATE`, `DELETE`), DDL (`DROP`, `ALTER`, `CREATE`), administrative commands (`GRANT`, `VACUUM`), and multi-statement injection.
+* **Pre-Execution PostgreSQL EXPLAIN**: Validates query plans, column references, and syntax against PostgreSQL before execution.
+* **Human-in-the-Loop Governed Approval**: Queries are never executed automatically. Users inspect and edit generated SQL in an interactive code editor before explicitly clicking **"Approve & Run"**.
+* **Isolated Read-Only Execution**: Executes on a dedicated read-only PostgreSQL connection with an enforced 10-second statement timeout and 1,000-row limit, generating interactive Plotly visualizations.
+
 ---
 
 ## SQL Showcase: Flagship Query Engineering
@@ -94,8 +113,8 @@ Benchmarks were evaluated over **20 alternating runs per state** (Unindexed vs. 
 
 ### 1. Setup Environment
 ```bash
-git clone https://github.com/Kurra-Srinivas/Banking-Data-Analytics.git
-cd Banking-Data-Analytics
+git clone https://github.com/Kurra-Srinivas/BankScope.git
+cd BankScope
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt

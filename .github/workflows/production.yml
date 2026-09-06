@@ -1,0 +1,57 @@
+name: Production CI & Deployment Verification
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  production-verify:
+    name: Production Verification & Security Guardrails
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Production Test Suite (Offline & Security Guardrails)
+        run: |
+          python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Verify Deployment Hygiene & Zero Committed Secrets
+        run: |
+          # Verify no sensitive files are tracked in git
+          if git ls-files | grep -E "(^|/)\.env$|(^|/)secrets\.toml$"; then
+            echo "ERROR: Sensitive credential files tracked by git!"
+            exit 1
+          fi
+          echo "Confirmed: No secret files tracked."
+          python -c "import streamlit, pandas, sqlalchemy, plotly, psycopg2; print('Core dependencies import successfully.')"
+
+      - name: Production Status Summary
+        run: |
+          echo "======================================================="
+          echo "BankScope Production Verification Succeeded"
+          echo "All SQL safety, CSV isolation, and LLM guardrails verified."
+          echo "Streamlit Community Cloud is target deployment host."
+          echo "======================================================="

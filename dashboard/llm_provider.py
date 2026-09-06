@@ -63,13 +63,22 @@ class GroqProvider(BaseLLMProvider):
     name: str = "Groq"
     
     def __init__(self, api_key: str = None, model: str = None):
-        self.api_key = (api_key or get_config_secret("GROQ_API_KEY")).strip()
+        if api_key is not None:
+            self.api_key = api_key.strip()
+        else:
+            self.api_key = get_config_secret("GROQ_API_KEY").strip()
         self.model = model or get_config_secret("GROQ_MODEL", "openai/gpt-oss-20b")
         base_url = get_config_secret("GROQ_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/")
         self.endpoint = f"{base_url}/chat/completions"
         
     def is_available(self) -> bool:
-        return bool(self.api_key and len(self.api_key) > 8)
+        if not self.api_key or len(self.api_key) <= 8:
+            return False
+        # Filter out placeholders and example keys
+        placeholder_indicators = ["your_", "placeholder", "xxx", "<", "replace"]
+        if any(ind in self.api_key.lower() for ind in placeholder_indicators):
+            return False
+        return True
         
     def generate_text(self, prompt: str, system_instruction: str = "") -> str:
         if not self.is_available():
@@ -107,13 +116,20 @@ class GeminiProvider(BaseLLMProvider):
     """Google Gemini API Provider using direct HTTPS endpoint."""
     
     name: str = "Google Gemini"
-    
     def __init__(self, api_key: str = None, model: str = None):
-        self.api_key = (api_key or get_config_secret("GEMINI_API_KEY") or get_config_secret("GOOGLE_API_KEY")).strip()
-        self.model = model or get_config_secret("GEMINI_MODEL", "gemini-1.5-flash")
+        if api_key is not None:
+            self.api_key = api_key.strip()
+        else:
+            self.api_key = (get_config_secret("GEMINI_API_KEY") or get_config_secret("GOOGLE_API_KEY")).strip()
+        self.model = model or get_config_secret("GEMINI_MODEL", "gemini-2.0-flash")
         
     def is_available(self) -> bool:
-        return bool(self.api_key and len(self.api_key) > 10)
+        if not self.api_key or len(self.api_key) <= 10:
+            return False
+        placeholder_indicators = ["your_", "placeholder", "xxx", "<", "replace"]
+        if any(ind in self.api_key.lower() for ind in placeholder_indicators):
+            return False
+        return True
         
     def generate_text(self, prompt: str, system_instruction: str = "") -> str:
         if not self.is_available():
@@ -165,12 +181,20 @@ class OpenAIProvider(BaseLLMProvider):
     name: str = "OpenAI"
     
     def __init__(self, api_key: str = None, model: str = None):
-        self.api_key = (api_key or get_config_secret("OPENAI_API_KEY")).strip()
+        if api_key is not None:
+            self.api_key = api_key.strip()
+        else:
+            self.api_key = get_config_secret("OPENAI_API_KEY").strip()
         self.model = model or get_config_secret("OPENAI_MODEL", "gpt-4o-mini")
         
     def is_available(self) -> bool:
-        return bool(self.api_key and len(self.api_key) > 10)
-        
+        if not self.api_key or len(self.api_key) <= 10:
+            return False
+        placeholder_indicators = ["your_", "placeholder", "xxx", "<", "replace"]
+        if any(ind in self.api_key.lower() for ind in placeholder_indicators):
+            return False
+        return True
+
     def generate_text(self, prompt: str, system_instruction: str = "") -> str:
         if not self.is_available():
             raise ValueError("OPENAI_API_KEY is not configured in .env or Streamlit Secrets.")
