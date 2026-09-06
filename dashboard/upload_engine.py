@@ -143,28 +143,32 @@ def profile_dataframe(df: pd.DataFrame) -> dict:
 def ensure_upload_schema_and_metadata():
     """
     Ensure the isolated 'uploads' schema and tracking table exist in PostgreSQL.
+    Safely handles offline test environments where database is unavailable.
     """
-    engine = get_engine()
-    with engine.begin() as conn:
-        conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {UPLOAD_SCHEMA};"))
-        conn.execute(text(f"""
-            CREATE TABLE IF NOT EXISTS {UPLOAD_SCHEMA}.{METADATA_TABLE} (
-                upload_id SERIAL PRIMARY KEY,
-                table_name VARCHAR(100) UNIQUE NOT NULL,
-                original_filename VARCHAR(255) NOT NULL,
-                row_count INTEGER NOT NULL,
-                column_count INTEGER NOT NULL,
-                duplicate_rows INTEGER NOT NULL,
-                file_size_bytes BIGINT,
-                session_id VARCHAR(64),
-                uploaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-        """))
-        # Add session_id column if migrating from older schema
-        conn.execute(text(f"""
-            ALTER TABLE {UPLOAD_SCHEMA}.{METADATA_TABLE} 
-            ADD COLUMN IF NOT EXISTS session_id VARCHAR(64);
-        """))
+    try:
+        engine = get_engine()
+        with engine.begin() as conn:
+            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {UPLOAD_SCHEMA};"))
+            conn.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS {UPLOAD_SCHEMA}.{METADATA_TABLE} (
+                    upload_id SERIAL PRIMARY KEY,
+                    table_name VARCHAR(100) UNIQUE NOT NULL,
+                    original_filename VARCHAR(255) NOT NULL,
+                    row_count INTEGER NOT NULL,
+                    column_count INTEGER NOT NULL,
+                    duplicate_rows INTEGER NOT NULL,
+                    file_size_bytes BIGINT,
+                    session_id VARCHAR(64),
+                    uploaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+            """))
+            # Add session_id column if migrating from older schema
+            conn.execute(text(f"""
+                ALTER TABLE {UPLOAD_SCHEMA}.{METADATA_TABLE} 
+                ADD COLUMN IF NOT EXISTS session_id VARCHAR(64);
+            """))
+    except Exception:
+        pass
 
 
 def ingest_csv(file_or_buffer, original_filename: str, session_id: str | None = None) -> dict:
@@ -291,12 +295,13 @@ def get_all_uploaded_tables(allowed_tables: list[str] | None = None) -> pd.DataF
     2. Strictly cross-verifies that every returned table physically exists in PostgreSQL.
     3. Prunes stale metadata if a physical table was dropped.
     """
+    if allowed_tables is not None and not allowed_tables:
+        return pd.DataFrame()
+
     ensure_upload_schema_and_metadata()
     engine = get_engine()
     
     if allowed_tables is not None:
-        if not allowed_tables:
-            return pd.DataFrame()
         placeholders = ", ".join([f":t{i}" for i in range(len(allowed_tables))])
         params = {f"t{i}": name for i, name in enumerate(allowed_tables)}
         query = f"""

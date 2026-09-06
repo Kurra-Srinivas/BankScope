@@ -2,11 +2,11 @@
 
 [![Production CI & Deployment Verification](https://github.com/Kurra-Srinivas/BankScope/actions/workflows/production.yml/badge.svg)](https://github.com/Kurra-Srinivas/BankScope/actions/workflows/production.yml)
 [![Production Environment](https://img.shields.io/github/deployments/Kurra-Srinivas/BankScope/production?label=Production&logo=github)](https://github.com/Kurra-Srinivas/BankScope/deployments/production)
-[![Streamlit App](https://img.shields.io/badge/Streamlit-Live%20Demo-FF4B4B?logo=streamlit&logoColor=white)](https://share.streamlit.io/)
+[![Streamlit App](https://img.shields.io/badge/Streamlit-Live%20Demo-FF4B4B?logo=streamlit&logoColor=white)](https://bankscope-c9yej9ugps7vfku7kq6rt6.streamlit.app/)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PostgreSQL 18](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 
-> **Live Demo:** `https://share.streamlit.io/kurra-srinivas/bankscope/main/dashboard/app.py` *(Streamlit Community Cloud)*
+> **Live Demo:** `https://bankscope-c9yej9ugps7vfku7kq6rt6.streamlit.app/` *(Streamlit Community Cloud)*
 
 An end-to-end banking intelligence platform, relational data warehouse, and human-in-the-loop NL-to-SQL engine built on **PostgreSQL 18 (Neon Cloud)**, **Groq AI (`openai/gpt-oss-20b`)**, **Streamlit**, and **Plotly**—modeling **1.26 million ledger records**, **$5.00B in transaction volume**, and **$7.49B in customer deposits**.
 
