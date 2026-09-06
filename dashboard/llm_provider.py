@@ -248,16 +248,16 @@ class OfflineBankingSQLProvider(BaseLLMProvider):
             tbl_match = re.search(r"Target Table:\s*`uploads\.([a-zA-Z0-9_]+)`", system_instruction) or re.search(r"uploads\.([a-zA-Z0-9_]+)", system_instruction)
             target_tbl = f"uploads.{tbl_match.group(1)}" if tbl_match else "uploads.dataset"
             
-            if "segment" in q_lower or "customer_segment" in q_lower:
+            if ("top" in q_lower or "highest" in q_lower) and "limit" in q_lower:
                 return (
                     f"SELECT \n"
                     f"    customer_segment,\n"
-                    f"    COUNT(*) AS card_count,\n"
-                    f"    ROUND(AVG(credit_limit)::numeric, 2) AS avg_credit_limit,\n"
-                    f"    ROUND(SUM(monthly_spend)::numeric, 2) AS total_monthly_spend\n"
+                    f"    ROUND(SUM(credit_limit)::numeric, 2) AS total_credit_limit,\n"
+                    f"    ROUND(AVG(credit_limit)::numeric, 2) AS avg_credit_limit\n"
                     f"FROM {target_tbl}\n"
                     f"GROUP BY customer_segment\n"
-                    f"ORDER BY avg_credit_limit DESC;"
+                    f"ORDER BY total_credit_limit DESC\n"
+                    f"LIMIT 10;"
                 )
             elif "spend" in q_lower and "status" in q_lower:
                 return (
@@ -288,6 +288,17 @@ class OfflineBankingSQLProvider(BaseLLMProvider):
                     f"FROM {target_tbl}\n"
                     f"GROUP BY card_status\n"
                     f"ORDER BY card_count DESC;"
+                )
+            elif "segment" in q_lower or "average credit limit" in q_lower:
+                return (
+                    f"SELECT \n"
+                    f"    customer_segment,\n"
+                    f"    COUNT(*) AS card_count,\n"
+                    f"    ROUND(AVG(credit_limit)::numeric, 2) AS avg_credit_limit,\n"
+                    f"    ROUND(SUM(monthly_spend)::numeric, 2) AS total_monthly_spend\n"
+                    f"FROM {target_tbl}\n"
+                    f"GROUP BY customer_segment\n"
+                    f"ORDER BY avg_credit_limit DESC;"
                 )
             elif "status" in q_lower or "card_status" in q_lower:
                 return (

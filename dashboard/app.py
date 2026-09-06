@@ -846,13 +846,12 @@ elif section == "7. Ask Your Data":
             st.rerun()
 
     # Clear active query state if user switched to a different dataset in dropdown
-    if "nl_sql_result" in st.session_state:
-        if st.session_state["nl_sql_result"].get("dataset_choice") != selected_dataset:
-            del st.session_state["nl_sql_result"]
-            if "edited_sql" in st.session_state:
-                del st.session_state["edited_sql"]
-            if "nl_exec_result" in st.session_state:
-                del st.session_state["nl_exec_result"]
+    if "active_dataset_choice" not in st.session_state:
+        st.session_state["active_dataset_choice"] = selected_dataset
+    elif st.session_state["active_dataset_choice"] != selected_dataset:
+        st.session_state["active_dataset_choice"] = selected_dataset
+        for k in ["nl_sql_result", "edited_sql", "sql_editor_area", "nl_exec_result", "nl_sql_question"]:
+            st.session_state.pop(k, None)
 
     with col_provider:
         llm_provider = get_llm_provider()
@@ -906,20 +905,29 @@ elif section == "7. Ask Your Data":
             "What percentage of cards are active, blocked, and closed?"
         ]
 
+    # Callback when user clicks an example question button
+    def set_sample_question(q_text: str):
+        st.session_state["nl_sql_question"] = q_text
+        # Invalidate all downstream SQL, editor, and execution results
+        for k in ["nl_sql_result", "edited_sql", "sql_editor_area", "nl_exec_result"]:
+            st.session_state.pop(k, None)
+
     st.markdown("<span style='color:#94A3B8; font-size:0.85rem;'>💡 Example questions to try:</span>", unsafe_allow_html=True)
     cols_q = st.columns(len(sample_questions))
-    selected_sample = None
     for idx, (col, sq) in enumerate(zip(cols_q, sample_questions)):
         with col:
-            if st.button(f"Example {idx+1}", key=f"ex_{idx}", help=sq):
-                selected_sample = sq
+            st.button(
+                f"Example {idx+1}", 
+                key=f"ex_{idx}", 
+                help=sq,
+                on_click=set_sample_question,
+                args=(sq,)
+            )
 
-    initial_q = selected_sample if selected_sample else ""
     user_question = st.text_input(
         "Enter natural language question:",
-        value=initial_q,
         placeholder="e.g., Who are the top 15 customers by total deposit balances?",
-        key="nl_question_input"
+        key="nl_sql_question"
     )
 
     col_btn1, col_btn2, _ = st.columns([1, 1, 3])
@@ -928,29 +936,42 @@ elif section == "7. Ask Your Data":
     with col_btn2:
         regenerate_clicked = st.button("🔄 Regenerate", help="Re-synthesize SQL query")
 
+    # Invalidate stale generated SQL if user changed the question text in the input box without generating yet
+    active_question = st.session_state.get("nl_sql_question", "").strip()
+    if "nl_sql_result" in st.session_state and not (generate_clicked or regenerate_clicked):
+        prior_gen_q = st.session_state["nl_sql_result"].get("question", "").strip()
+        if active_question != prior_gen_q:
+            for k in ["nl_sql_result", "edited_sql", "sql_editor_area", "nl_exec_result"]:
+                st.session_state.pop(k, None)
+
     # State management for generated query
     if generate_clicked or regenerate_clicked:
-        if not user_question.strip():
+        current_question = st.session_state.get("nl_sql_question", user_question).strip()
+        if not current_question:
             st.warning("⚠️ Please enter a question before generating SQL.")
         else:
             with st.spinner(f"Synthesizing PostgreSQL query via {llm_provider.name}..."):
                 try:
-                    res = generate_sql_query(user_question, selected_dataset, provider=llm_provider)
+                    res = generate_sql_query(current_question, selected_dataset, provider=llm_provider)
                 except FileNotFoundError as fnf_err:
                     st.error(f"⚠️ {str(fnf_err)}")
                     target_tbl = selected_dataset.replace("upload:", "").strip()
                     if target_tbl in st.session_state.get("session_uploaded_tables", []):
                         st.session_state["session_uploaded_tables"].remove(target_tbl)
+                    for k in ["nl_sql_result", "edited_sql", "sql_editor_area", "nl_exec_result"]:
+                        st.session_state.pop(k, None)
                     st.rerun()
                 except Exception as gen_err:
                     st.warning(f"⚠️ {llm_provider.name} error: {str(gen_err)}. Falling back to Rule-Based Demo Synthesis.")
                     fallback_prov = OfflineBankingSQLProvider()
-                    res = generate_sql_query(user_question, selected_dataset, provider=fallback_prov)
+                    res = generate_sql_query(current_question, selected_dataset, provider=fallback_prov)
+                    
                 st.session_state["nl_sql_result"] = res
                 st.session_state["edited_sql"] = res["sql"]
+                # CRITICAL: Overwrite the text_area widget state so the editor displays the fresh SQL!
+                st.session_state["sql_editor_area"] = res["sql"]
                 # Invalidate any previous execution result when query is regenerated
-                if "nl_exec_result" in st.session_state:
-                    del st.session_state["nl_exec_result"]
+                st.session_state.pop("nl_exec_result", None)
 
     # 3. Display Generated SQL & Editor
     if "nl_sql_result" in st.session_state:
@@ -958,16 +979,24 @@ elif section == "7. Ask Your Data":
         
         st.markdown('<div class="section-header">3. Review & Edit SQL Statement</div>', unsafe_allow_html=True)
         
+        # Ensure sql_editor_area widget key has fresh SQL
+        if "sql_editor_area" not in st.session_state:
+            st.session_state["sql_editor_area"] = res["sql"]
+
         # Editable SQL Editor
-        current_sql = st.session_state.get("edited_sql", res["sql"])
         edited_sql = st.text_area(
             "Review & Edit SQL Statement:",
-            value=current_sql,
             height=220,
             key="sql_editor_area",
             help="You can inspect and modify this query. Query execution strictly requires explicit human approval."
         )
         st.session_state["edited_sql"] = edited_sql
+
+        # If user manually edited the SQL after executing, invalidate stale execution result
+        if "nl_exec_result" in st.session_state:
+            executed_sql = st.session_state["nl_exec_result"].get("sql_executed", "").strip()
+            if edited_sql.strip() != executed_sql:
+                st.session_state.pop("nl_exec_result", None)
 
         # Live multi-tier validation of edited query
         is_sec_valid, sec_msg = validate_sql_security(edited_sql)

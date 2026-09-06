@@ -374,6 +374,10 @@ def generate_sql_query(question: str, dataset_choice: str, provider: BaseLLMProv
     if provider is None:
         provider = get_llm_provider()
         
+    import logging
+    logger = logging.getLogger("bankscope.nl_sql")
+    logger.info(f"generate_sql_query: question='{question[:120]}', dataset='{dataset_choice}', provider='{provider.name}'")
+
     schema_info = get_dataset_schema_context(dataset_choice)
     
     system_instruction = f"""
