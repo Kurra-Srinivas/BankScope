@@ -165,8 +165,8 @@ def execute_query(sql: str, params=None) -> pd.DataFrame:
         try:
             with engine.connect() as conn:
                 if params is not None:
-                    # Handle tuple/dict parameters
-                    df = pd.read_sql_query(text(sql), conn, params=params)
+                    # Handle tuple/dict parameters via DBAPI connection
+                    df = pd.read_sql_query(sql, conn.connection, params=params)
                 else:
                     df = pd.read_sql_query(text(sql), conn)
             return df
