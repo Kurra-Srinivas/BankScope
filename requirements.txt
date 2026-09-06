@@ -1,11 +1,9 @@
+streamlit
 pandas
 numpy
 sqlalchemy
 psycopg2-binary
-python-dotenv
-matplotlib
 plotly
-streamlit
-openpyxl
-jupyter
-pytest
+python-dotenv
+requests
+sqlparse

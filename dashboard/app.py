@@ -26,6 +26,22 @@ from dashboard.queries import (
     get_annual_loan_trend,
     get_benchmark_summary,
 )
+from dashboard.upload_engine import (
+    validate_csv_file,
+    ingest_csv,
+    get_all_uploaded_tables,
+    get_uploaded_table_data,
+    profile_dataframe,
+)
+from dashboard.sql_generator import (
+    generate_sql_query,
+    get_dataset_schema_context,
+    validate_sql_security,
+    validate_with_postgres_explain,
+    execute_approved_sql,
+)
+from dashboard.sql_visualizer import generate_result_visualization
+from dashboard.llm_provider import get_llm_provider, OfflineBankingSQLProvider
 from dashboard.db import test_db_connection
 
 # Page Configuration
@@ -93,7 +109,7 @@ st.markdown(
 
 # Verify Database Reachability
 if not test_db_connection():
-    st.error("🚨 Could not connect to PostgreSQL `bankscope_db`. Please verify that PostgreSQL is running and `.env` credentials are correct.")
+    st.error("🚨 Could not establish connection to the PostgreSQL database. Please verify that the database server is running and credentials are correctly configured in `.env` (for local development) or Streamlit Secrets (for cloud deployment).")
     st.stop()
 
 # Sidebar Navigation & Filter Controls
@@ -108,6 +124,8 @@ section_options = [
     "3. Transaction Analytics",
     "4. Loans & Lending",
     "5. SQL Performance",
+    "6. Upload & Explore Data",
+    "7. Ask Your Data",
 ]
 
 query_sec = st.query_params.get("section", "")
@@ -586,4 +604,341 @@ elif section == "5. SQL Performance":
         ),
         use_container_width=True,
     )
+
+
+# =============================================================================
+# SECTION 6: UPLOAD & EXPLORE DATA
+# =============================================================================
+elif section == "6. Upload & Explore Data":
+    st.markdown('<div class="main-title">Upload & Explore Data</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-title">Securely ingest external CSV datasets into an isolated PostgreSQL schema (<code>uploads</code>) with automated data quality profiling.</div>', unsafe_allow_html=True)
+
+    tab_upload, tab_explore = st.tabs(["📤 Ingest New CSV", "🗂️ Explore Ingested Tables"])
+
+    with tab_upload:
+        st.markdown('<div class="section-header">Upload CSV Dataset</div>', unsafe_allow_html=True)
+        uploaded_file = st.file_uploader(
+            "Choose a CSV file to profile and load into PostgreSQL",
+            type=["csv"],
+            help="Maximum file size: 50 MB. Tables are loaded into an isolated 'uploads' schema."
+        )
+
+        if uploaded_file is not None:
+            is_valid, err_msg = validate_csv_file(uploaded_file)
+            if not is_valid:
+                st.error(f"❌ {err_msg}")
+            else:
+                file_key = f"uploaded_{uploaded_file.name}_{uploaded_file.size}"
+                if file_key not in st.session_state:
+                    with st.spinner("Analyzing CSV structure and ingesting into PostgreSQL..."):
+                        try:
+                            result = ingest_csv(uploaded_file, uploaded_file.name)
+                            st.session_state[file_key] = result
+                        except Exception as e:
+                            st.error(f"❌ Ingestion failed: {str(e)}")
+                            result = None
+                else:
+                    result = st.session_state[file_key]
+
+                if result and result.get("status") == "SUCCESS":
+                    st.success(f"✅ Successfully ingested into PostgreSQL table: **`{result['schema']}.{result['table_name']}`**")
+
+                    profile = result["profile"]
+
+                    # 4 Top KPI Cards
+                    k1, k2, k3, k4 = st.columns(4)
+                    with k1:
+                        st.markdown(
+                            f"""
+                            <div class="kpi-card">
+                                <div class="kpi-label">Total Rows Loaded</div>
+                                <div class="kpi-val">{profile['total_rows']:,}</div>
+                                <div class="kpi-sub">Dataset records</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                    with k2:
+                        st.markdown(
+                            f"""
+                            <div class="kpi-card">
+                                <div class="kpi-label">Total Columns</div>
+                                <div class="kpi-val">{profile['total_cols']:,}</div>
+                                <div class="kpi-sub">Detected fields</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                    with k3:
+                        dup_color = "#EF4444" if profile['duplicate_rows'] > 0 else "#10B981"
+                        st.markdown(
+                            f"""
+                            <div class="kpi-card">
+                                <div class="kpi-label">Duplicate Rows</div>
+                                <div class="kpi-val" style="color:{dup_color}">{profile['duplicate_rows']:,}</div>
+                                <div class="kpi-sub">Exact duplicate lines</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                    with k4:
+                        null_color = "#F59E0B" if profile['overall_null_pct'] > 5.0 else "#10B981"
+                        st.markdown(
+                            f"""
+                            <div class="kpi-card">
+                                <div class="kpi-label">Missing Data Rate</div>
+                                <div class="kpi-val" style="color:{null_color}">{profile['overall_null_pct']}%</div>
+                                <div class="kpi-sub">{profile['total_null_cells']:,} empty cells</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+
+                    # Schema Profiling & Data Quality Table
+                    st.markdown('<div class="section-header">Schema & Data Quality Profile</div>', unsafe_allow_html=True)
+                    df_profile = pd.DataFrame(profile["columns"])
+                    st.dataframe(
+                        df_profile[[
+                            "column_name", "inferred_type", "non_null_count", 
+                            "null_count", "null_pct", "unique_values", "sample_value"
+                        ]].rename(columns={
+                            "column_name": "Field Name (Sanitized)",
+                            "inferred_type": "Inferred Type",
+                            "non_null_count": "Populated Rows",
+                            "null_count": "Null Count",
+                            "null_pct": "Null %",
+                            "unique_values": "Unique Values",
+                            "sample_value": "Sample Value"
+                        }),
+                        use_container_width=True,
+                    )
+
+                    # Interactive Data Preview
+                    st.markdown('<div class="section-header">Dataset Preview (First 100 Rows)</div>', unsafe_allow_html=True)
+                    st.dataframe(result["preview_df"], use_container_width=True)
+
+    with tab_explore:
+        st.markdown('<div class="section-header">Explore Ingested PostgreSQL Tables</div>', unsafe_allow_html=True)
+        uploaded_meta = get_all_uploaded_tables()
+
+        if uploaded_meta.empty:
+            st.info("ℹ️ No custom datasets uploaded yet. Upload a CSV in the tab above to explore it here.")
+        else:
+            table_choices = uploaded_meta["table_name"].tolist()
+            selected_table = st.selectbox(
+                "Select an ingested table to explore:",
+                table_choices,
+                format_func=lambda t: f"{t} ({uploaded_meta[uploaded_meta['table_name'] == t]['original_filename'].values[0]})"
+            )
+
+            if selected_table:
+                meta_row = uploaded_meta[uploaded_meta["table_name"] == selected_table].iloc[0]
+                
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Original File", str(meta_row["original_filename"]))
+                m2.metric("Total Rows", f"{meta_row['row_count']:,}")
+                m3.metric("Columns", f"{meta_row['column_count']}")
+                m4.metric("File Size", f"{meta_row['size_kb']} KB")
+
+                st.markdown(f"**PostgreSQL Target**: `uploads.{selected_table}` | **Uploaded At**: `{meta_row['uploaded_at']}`")
+                
+                with st.spinner("Fetching table records..."):
+                    df_sample = get_uploaded_table_data(selected_table, limit=100)
+                    st.dataframe(df_sample, use_container_width=True)
+
+
+# =============================================================================
+# SECTION 7: ASK YOUR DATA (NATURAL-LANGUAGE SQL ENGINE)
+# =============================================================================
+elif section == "7. Ask Your Data":
+    st.markdown('<div class="main-title">Ask Your Data</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-title">Synthesize schema-aware, read-only PostgreSQL queries from plain English questions across core banking tables and uploaded datasets.</div>', unsafe_allow_html=True)
+
+    # 1. Dataset Selection
+    st.markdown('<div class="section-header">1. Select Target Dataset</div>', unsafe_allow_html=True)
+    
+    uploaded_meta = get_all_uploaded_tables()
+    dataset_options = ["BankScope Banking Data"]
+    if not uploaded_meta.empty:
+        for _, r in uploaded_meta.iterrows():
+            dataset_options.append(f"upload:{r['table_name']}")
+
+    col_ds, col_provider = st.columns([2, 1])
+    with col_ds:
+        selected_dataset = st.selectbox(
+            "Choose Dataset Context:",
+            dataset_options,
+            format_func=lambda d: "🏦 BankScope Core Warehouse (7 Tables, 1.26M rows)" if d == "BankScope Banking Data" else f"📁 Uploaded: {d.replace('upload:', '')} ({uploaded_meta[uploaded_meta['table_name'] == d.replace('upload:', '')]['original_filename'].values[0]})"
+        )
+    with col_provider:
+        llm_provider = get_llm_provider()
+        is_offline = isinstance(llm_provider, OfflineBankingSQLProvider)
+        badge_header = "DEMO SYNTHESIS ENGINE" if is_offline else "ACTIVE LLM PROVIDER"
+        badge_title = f"💡 {llm_provider.name} (Rule-Based Synthesis)" if is_offline else f"⚡ {llm_provider.name} (Live API)"
+        badge_color = "#FBBF24" if is_offline else "#60A5FA"
+        st.markdown(
+            f"""
+            <div style="background:#1E293B; border:1px solid #334155; border-radius:8px; padding:8px 12px; margin-top:24px;">
+                <span style="color:#94A3B8; font-size:0.75rem; font-weight:600; text-transform:uppercase;">{badge_header}</span><br/>
+                <span style="color:{badge_color}; font-weight:600; font-size:0.88rem;">{badge_title}</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    # Schema Inspector Expander
+    schema_ctx = get_dataset_schema_context(selected_dataset)
+    with st.expander("🔍 View Active Dataset Schema & Available Fields", expanded=False):
+        st.markdown(schema_ctx["context_string"])
+
+    # 2. Question Input
+    st.markdown('<div class="section-header">2. Enter Business Question</div>', unsafe_allow_html=True)
+    
+    if selected_dataset == "BankScope Banking Data":
+        sample_questions = [
+            "Who are the top 15 customers by total deposit balances across their accounts?",
+            "What is the total transaction volume and count broken down by month?",
+            "Which 15 merchants processed the highest dollar volume?",
+            "What is the distribution of loans and total principal across interest rate tiers?",
+            "Which cities have the highest customer concentration and total deposits?"
+        ]
+    else:
+        sample_questions = [
+            "What is the total record count in this dataset?",
+            "What is the average balance and credit limit across all accounts?",
+            "Are there any duplicate card records in this dataset?",
+            "How many cards are in each status category?"
+        ]
+
+    st.markdown("<span style='color:#94A3B8; font-size:0.85rem;'>💡 Example questions to try:</span>", unsafe_allow_html=True)
+    cols_q = st.columns(len(sample_questions))
+    selected_sample = None
+    for idx, (col, sq) in enumerate(zip(cols_q, sample_questions)):
+        with col:
+            if st.button(f"Example {idx+1}", key=f"ex_{idx}", help=sq):
+                selected_sample = sq
+
+    initial_q = selected_sample if selected_sample else ""
+    user_question = st.text_input(
+        "Enter natural language question:",
+        value=initial_q,
+        placeholder="e.g., Who are the top 15 customers by total deposit balances?",
+        key="nl_question_input"
+    )
+
+    col_btn1, col_btn2, _ = st.columns([1, 1, 3])
+    with col_btn1:
+        generate_clicked = st.button("✨ Generate SQL", type="primary")
+    with col_btn2:
+        regenerate_clicked = st.button("🔄 Regenerate", help="Re-synthesize SQL query")
+
+    # State management for generated query
+    if generate_clicked or regenerate_clicked:
+        if not user_question.strip():
+            st.warning("⚠️ Please enter a question before generating SQL.")
+        else:
+            with st.spinner(f"Synthesizing PostgreSQL query via {llm_provider.name}..."):
+                res = generate_sql_query(user_question, selected_dataset, provider=llm_provider)
+                st.session_state["nl_sql_result"] = res
+                st.session_state["edited_sql"] = res["sql"]
+                # Invalidate any previous execution result when query is regenerated
+                if "nl_exec_result" in st.session_state:
+                    del st.session_state["nl_exec_result"]
+
+    # 3. Display Generated SQL & Editor
+    if "nl_sql_result" in st.session_state:
+        res = st.session_state["nl_sql_result"]
+        
+        st.markdown('<div class="section-header">3. Review & Edit SQL Statement</div>', unsafe_allow_html=True)
+        
+        # Editable SQL Editor
+        current_sql = st.session_state.get("edited_sql", res["sql"])
+        edited_sql = st.text_area(
+            "Review & Edit SQL Statement:",
+            value=current_sql,
+            height=220,
+            key="sql_editor_area",
+            help="You can inspect and modify this query. Query execution strictly requires explicit human approval."
+        )
+        st.session_state["edited_sql"] = edited_sql
+
+        # Live multi-tier validation of edited query
+        is_sec_valid, sec_msg = validate_sql_security(edited_sql)
+        explain_valid = False
+        explain_msg = ""
+        if is_sec_valid:
+            explain_valid, explain_msg = validate_with_postgres_explain(edited_sql)
+
+        if is_sec_valid and explain_valid:
+            st.success(f"🛡️ **Validation Passed**: Query plan verified by PostgreSQL. Read-only execution permitted on `{res['dataset_name']}`.")
+        elif not is_sec_valid:
+            st.error(f"🚨 **Security Policy Violation**: {sec_msg}")
+        else:
+            st.warning(f"⚠️ **PostgreSQL Catalog/Planner Notice**: {explain_msg}")
+
+        # 4. Human-in-the-Loop Execution Gate
+        st.markdown('<div class="section-header">4. Approval & Read-Only Execution</div>', unsafe_allow_html=True)
+        
+        col_gate_info, col_gate_btn = st.columns([3, 1])
+        with col_gate_info:
+            st.markdown(
+                f"""
+                <div style="background:#0F172A; border:1px solid #334155; border-radius:8px; padding:10px 14px;">
+                    <span style="color:#94A3B8; font-size:0.8rem; font-weight:600;">TARGET DATASET:</span> 
+                    <span style="color:#F8FAFC; font-weight:600;">{res['dataset_name']}</span> &nbsp;|&nbsp; 
+                    <span style="color:#94A3B8; font-size:0.8rem; font-weight:600;">ROW LIMIT:</span> 
+                    <span style="color:#34D399; font-weight:600;">500</span> &nbsp;|&nbsp;
+                    <span style="color:#94A3B8; font-size:0.8rem; font-weight:600;">TIMEOUT:</span> 
+                    <span style="color:#60A5FA; font-weight:600;">10s</span><br/>
+                    <span style="color:#94A3B8; font-size:0.75rem;">🔒 Dedicated read-only connection. Zero write privileges. Requires explicit user approval.</span>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        with col_gate_btn:
+            can_execute = is_sec_valid and explain_valid
+            approve_and_run = st.button(
+                "🚀 Approve & Run",
+                type="primary",
+                disabled=not can_execute,
+                help="Approve and execute this read-only query on PostgreSQL"
+            )
+
+        if approve_and_run:
+            with st.spinner("Executing approved read-only query on PostgreSQL..."):
+                exec_result = execute_approved_sql(edited_sql, max_rows=500)
+                st.session_state["nl_exec_result"] = exec_result
+
+        # 5. Query Results & Visualizations
+        if "nl_exec_result" in st.session_state:
+            exec_res = st.session_state["nl_exec_result"]
+            st.markdown('<div class="section-header">5. Query Results & Analytics</div>', unsafe_allow_html=True)
+            
+            if not exec_res["success"]:
+                st.error(f"❌ **Execution Error**: {exec_res['error_message']}")
+            else:
+                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                with col_m1:
+                    st.metric("Status", "Success")
+                with col_m2:
+                    st.metric("Rows Returned", f"{exec_res['row_count']:,}")
+                with col_m3:
+                    st.metric("Latency", f"{exec_res['execution_time_ms']} ms")
+                with col_m4:
+                    st.metric("Connection", "Read-Only Isolated")
+
+                df_res = exec_res["df"]
+                if df_res.empty:
+                    st.info("ℹ️ Query executed successfully but returned 0 rows.")
+                else:
+                    # Dynamic Plotly Visualization
+                    fig = generate_result_visualization(df_res)
+                    if fig is not None:
+                        st.plotly_chart(fig, use_container_width=True)
+
+                    # Result Data Table
+                    st.markdown("#### **Result Data Table**")
+                    st.dataframe(df_res, use_container_width=True, hide_index=True)
+
+
 

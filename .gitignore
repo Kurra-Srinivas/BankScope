@@ -24,8 +24,9 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Streamlit
-.streamlit/
+# Streamlit secrets (never commit credentials)
+.streamlit/secrets.toml
+secrets.toml
 
 # IDE & OS files
 .vscode/

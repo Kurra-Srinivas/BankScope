@@ -29,6 +29,7 @@ DB_PORT = os.getenv("DB_PORT") or os.getenv("PGPORT", "5432")
 DB_NAME = os.getenv("DB_NAME") or "bankscope_db"
 DB_USER = os.getenv("DB_USER") or os.getenv("PGUSER", "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD") or os.getenv("PGPASSWORD", "")
+DB_SSLMODE = os.getenv("DB_SSLMODE") or os.getenv("PGSSLMODE")
 
 SQLITE_PATH = os.path.join(
     BASE_DIR, "data", "raw", "banking_dataset_kaggle", "data", "database", "bank_sqlite.db"
@@ -50,44 +51,61 @@ TABLES_ORDER = [
 
 def get_pg_admin_connection():
     """Connect to default 'postgres' database to check/create target database."""
-    return psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        dbname="postgres",
-        user=DB_USER,
-        password=DB_PASSWORD,
-    )
+    params = {
+        "host": DB_HOST,
+        "port": DB_PORT,
+        "dbname": "postgres",
+        "user": DB_USER,
+        "password": DB_PASSWORD,
+    }
+    if DB_SSLMODE:
+        params["sslmode"] = DB_SSLMODE
+    return psycopg2.connect(**params)
 
 
 def get_pg_connection():
     """Connect to target BankScope database."""
-    return psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-    )
+    params = {
+        "host": DB_HOST,
+        "port": DB_PORT,
+        "dbname": DB_NAME,
+        "user": DB_USER,
+        "password": DB_PASSWORD,
+    }
+    if DB_SSLMODE:
+        params["sslmode"] = DB_SSLMODE
+    return psycopg2.connect(**params)
 
 
 def create_database_if_not_exists():
     """Ensure BankScope PostgreSQL database exists."""
     print(f"[*] Checking PostgreSQL database '{DB_NAME}' on {DB_HOST}:{DB_PORT}...")
-    conn = get_pg_admin_connection()
-    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-    cursor = conn.cursor()
+    try:
+        conn = get_pg_connection()
+        conn.close()
+        print(f"[OK] Database '{DB_NAME}' is ready for schema creation.")
+        return
+    except Exception:
+        pass
 
-    cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s;", (DB_NAME,))
-    exists = cursor.fetchone()
-    if not exists:
-        print(f"[+] Creating database '{DB_NAME}'...")
-        cursor.execute(f'CREATE DATABASE "{DB_NAME}";')
-        print(f"[OK] Database '{DB_NAME}' created successfully.")
-    else:
-        print(f"[OK] Database '{DB_NAME}' already exists.")
+    try:
+        conn = get_pg_admin_connection()
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        cursor = conn.cursor()
 
-    cursor.close()
-    conn.close()
+        cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s;", (DB_NAME,))
+        exists = cursor.fetchone()
+        if not exists:
+            print(f"[+] Creating database '{DB_NAME}'...")
+            cursor.execute(f'CREATE DATABASE "{DB_NAME}";')
+            print(f"[OK] Database '{DB_NAME}' created successfully.")
+        else:
+            print(f"[OK] Database '{DB_NAME}' already exists.")
+
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"[*] Note on database verification: {e}")
 
 
 def execute_sql_file(conn, filepath, description):

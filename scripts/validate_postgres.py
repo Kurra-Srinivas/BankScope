@@ -24,6 +24,7 @@ DB_PORT = os.getenv("DB_PORT") or os.getenv("PGPORT", "5432")
 DB_NAME = os.getenv("DB_NAME") or "bankscope_db"
 DB_USER = os.getenv("DB_USER") or os.getenv("PGUSER", "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD") or os.getenv("PGPASSWORD", "")
+DB_SSLMODE = os.getenv("DB_SSLMODE") or os.getenv("PGSSLMODE")
 
 SQLITE_PATH = os.path.join(
     BASE_DIR, "data", "raw", "banking_dataset_kaggle", "data", "database", "bank_sqlite.db"
@@ -48,13 +49,17 @@ def run_validation():
     print(f"Canonical Source : {SQLITE_PATH}")
     print("=================================================================")
 
-    pg_conn = psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-    )
+    pg_params = {
+        "host": DB_HOST,
+        "port": DB_PORT,
+        "dbname": DB_NAME,
+        "user": DB_USER,
+        "password": DB_PASSWORD,
+    }
+    if DB_SSLMODE:
+        pg_params["sslmode"] = DB_SSLMODE
+
+    pg_conn = psycopg2.connect(**pg_params)
     sqlite_conn = sqlite3.connect(f"file:{SQLITE_PATH}?mode=ro", uri=True)
 
     pg_cur = pg_conn.cursor()
@@ -145,6 +150,33 @@ def run_validation():
     print(f"  [{status}] Amount Min/Max/Avg : SQLite [{sq_stats[2]} / {sq_stats[3]} / {sq_stats[4]}]")
     print(f"                       Postgres [{pg_stats[2]} / {pg_stats[3]} / {pg_stats[4]}]")
     validation_results["transaction_stats"] = {"status": status}
+
+    # 5. Financial Exposure & Ledger Totals Audit
+    print("\n--- 5. Financial Exposure & Ledger Totals Audit ---")
+    sq_cur.execute("SELECT SUM(amount_usd) FROM transactions;")
+    sq_txn_sum = sq_cur.fetchone()[0]
+    pg_cur.execute("SELECT SUM(amount_usd)::NUMERIC FROM transactions;")
+    pg_txn_sum = pg_cur.fetchone()[0]
+    txn_match = abs(float(sq_txn_sum) - float(pg_txn_sum)) < 0.01
+
+    sq_cur.execute("SELECT SUM(balance_usd) FROM accounts;")
+    sq_dep_sum = sq_cur.fetchone()[0]
+    pg_cur.execute("SELECT SUM(balance_usd)::NUMERIC FROM accounts;")
+    pg_dep_sum = pg_cur.fetchone()[0]
+    dep_match = abs(float(sq_dep_sum) - float(pg_dep_sum)) < 0.01
+
+    sq_cur.execute("SELECT SUM(loan_amount) FROM loans;")
+    sq_loan_sum = sq_cur.fetchone()[0]
+    pg_cur.execute("SELECT SUM(loan_amount)::NUMERIC FROM loans;")
+    pg_loan_sum = pg_cur.fetchone()[0]
+    loan_match = abs(float(sq_loan_sum) - float(pg_loan_sum)) < 0.01
+
+    print(f"  [{'PASS' if txn_match else 'FAIL'}] Transaction Vol : SQLite [${sq_txn_sum:,.2f}] | Postgres [${pg_txn_sum:,.2f}]")
+    print(f"  [{'PASS' if dep_match else 'FAIL'}] Total Deposits  : SQLite [${sq_dep_sum:,.2f}] | Postgres [${pg_dep_sum:,.2f}]")
+    print(f"  [{'PASS' if loan_match else 'FAIL'}] Loan Exposure   : SQLite [${sq_loan_sum:,.2f}] | Postgres [${pg_loan_sum:,.2f}]")
+
+    if not (txn_match and dep_match and loan_match):
+        all_passed = False
 
     pg_cur.close()
     pg_conn.close()
