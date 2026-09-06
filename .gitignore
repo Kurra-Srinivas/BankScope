@@ -1,0 +1,46 @@
+# Environments and virtualenvs
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables & credentials
+.env
+.env.local
+*.env
+!.env.example
+
+# Byte-compiled / optimized / cache files
+__pycache__/
+*.pyc
+*.py[cod]
+*$py.class
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Testing and coverage caches
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Streamlit
+.streamlit/
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Scratch and Temporary directories
+scratch/
+*.log
+
+# Local databases & large raw artifacts
+*.db
+*.sqlite
+*.sqlite3
+data/
+data/raw/

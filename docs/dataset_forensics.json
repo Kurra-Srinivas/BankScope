@@ -1,0 +1,471 @@
+{
+  "files_inventory": [
+    {
+      "filename": "accounts.csv",
+      "relative_path": "csv\\accounts.csv",
+      "size_bytes": 4576052,
+      "size_mb": 4.36
+    },
+    {
+      "filename": "branches.csv",
+      "relative_path": "csv\\branches.csv",
+      "size_bytes": 25055,
+      "size_mb": 0.02
+    },
+    {
+      "filename": "cards.csv",
+      "relative_path": "csv\\cards.csv",
+      "size_bytes": 4949764,
+      "size_mb": 4.72
+    },
+    {
+      "filename": "customers.csv",
+      "relative_path": "csv\\customers.csv",
+      "size_bytes": 4048431,
+      "size_mb": 3.86
+    },
+    {
+      "filename": "loans.csv",
+      "relative_path": "csv\\loans.csv",
+      "size_bytes": 1734691,
+      "size_mb": 1.65
+    },
+    {
+      "filename": "merchants.csv",
+      "relative_path": "csv\\merchants.csv",
+      "size_bytes": 236937,
+      "size_mb": 0.23
+    },
+    {
+      "filename": "bank_sqlite.db",
+      "relative_path": "database\\bank_sqlite.db",
+      "size_bytes": 107266048,
+      "size_mb": 102.3
+    },
+    {
+      "filename": "accounts_inserts.sql",
+      "relative_path": "sql\\accounts_inserts.sql",
+      "size_bytes": 13425994,
+      "size_mb": 12.8
+    },
+    {
+      "filename": "bank.sql",
+      "relative_path": "sql\\bank.sql",
+      "size_bytes": 241324769,
+      "size_mb": 230.15
+    },
+    {
+      "filename": "branches_inserts.sql",
+      "relative_path": "sql\\branches_inserts.sql",
+      "size_bytes": 82933,
+      "size_mb": 0.08
+    },
+    {
+      "filename": "cards_inserts.sql",
+      "relative_path": "sql\\cards_inserts.sql",
+      "size_bytes": 14749719,
+      "size_mb": 14.07
+    },
+    {
+      "filename": "customers_inserts.sql",
+      "relative_path": "sql\\customers_inserts.sql",
+      "size_bytes": 10898363,
+      "size_mb": 10.39
+    },
+    {
+      "filename": "loans_inserts.sql",
+      "relative_path": "sql\\loans_inserts.sql",
+      "size_bytes": 5154634,
+      "size_mb": 4.92
+    },
+    {
+      "filename": "merchants_inserts.sql",
+      "relative_path": "sql\\merchants_inserts.sql",
+      "size_bytes": 608480,
+      "size_mb": 0.58
+    },
+    {
+      "filename": "schema.sql",
+      "relative_path": "sql\\schema.sql",
+      "size_bytes": 1453,
+      "size_mb": 0.0
+    },
+    {
+      "filename": "transactions_inserts.sql",
+      "relative_path": "sql\\transactions_inserts.sql",
+      "size_bytes": 198789174,
+      "size_mb": 189.58
+    }
+  ],
+  "csv_profiles": {
+    "accounts.csv": {
+      "row_count": 75000,
+      "columns": [
+        "account_id",
+        "customer_id",
+        "account_type",
+        "balance_usd",
+        "open_date"
+      ],
+      "sample_dtypes": {
+        "account_id": "str",
+        "customer_id": "str",
+        "account_type": "str",
+        "balance_usd": "float64",
+        "open_date": "str"
+      }
+    },
+    "branches.csv": {
+      "row_count": 500,
+      "columns": [
+        "branch_id",
+        "branch_name",
+        "manager_name"
+      ],
+      "sample_dtypes": {
+        "branch_id": "str",
+        "branch_name": "str",
+        "manager_name": "str"
+      }
+    },
+    "cards.csv": {
+      "row_count": 100000,
+      "columns": [
+        "card_id",
+        "account_id",
+        "card_type",
+        "expiration_date"
+      ],
+      "sample_dtypes": {
+        "card_id": "str",
+        "account_id": "str",
+        "card_type": "str",
+        "expiration_date": "str"
+      }
+    },
+    "customers.csv": {
+      "row_count": 50000,
+      "columns": [
+        "customer_id",
+        "first_name",
+        "last_name",
+        "email",
+        "city",
+        "credit_score",
+        "created_at"
+      ],
+      "sample_dtypes": {
+        "customer_id": "str",
+        "first_name": "str",
+        "last_name": "str",
+        "email": "str",
+        "city": "str",
+        "credit_score": "int64",
+        "created_at": "str"
+      }
+    },
+    "loans.csv": {
+      "row_count": 30000,
+      "columns": [
+        "loan_id",
+        "customer_id",
+        "loan_amount",
+        "interest_rate",
+        "start_date"
+      ],
+      "sample_dtypes": {
+        "loan_id": "str",
+        "customer_id": "str",
+        "loan_amount": "float64",
+        "interest_rate": "float64",
+        "start_date": "str"
+      }
+    },
+    "merchants.csv": {
+      "row_count": 5000,
+      "columns": [
+        "merchant_id",
+        "merchant_name",
+        "city"
+      ],
+      "sample_dtypes": {
+        "merchant_id": "str",
+        "merchant_name": "str",
+        "city": "str"
+      }
+    }
+  },
+  "sqlite_profiles": {
+    "accounts": {
+      "row_count": 75000,
+      "columns": [
+        "account_id",
+        "customer_id",
+        "account_type",
+        "balance_usd",
+        "open_date"
+      ],
+      "types": {
+        "account_id": "TEXT",
+        "customer_id": "TEXT",
+        "account_type": "TEXT",
+        "balance_usd": "REAL",
+        "open_date": "TIMESTAMP"
+      },
+      "null_counts": {
+        "account_id": 0,
+        "customer_id": 0,
+        "account_type": 0,
+        "balance_usd": 0,
+        "open_date": 0
+      },
+      "candidate_pk": "account_id",
+      "candidate_pk_unique": true,
+      "distinct_pk_count": 75000
+    },
+    "branches": {
+      "row_count": 500,
+      "columns": [
+        "branch_id",
+        "branch_name",
+        "manager_name",
+        "city",
+        "country"
+      ],
+      "types": {
+        "branch_id": "TEXT",
+        "branch_name": "TEXT",
+        "manager_name": "TEXT",
+        "city": "TEXT",
+        "country": "TEXT"
+      },
+      "null_counts": {
+        "branch_id": 0,
+        "branch_name": 0,
+        "manager_name": 0,
+        "city": 500,
+        "country": 500
+      },
+      "candidate_pk": "branch_id",
+      "candidate_pk_unique": true,
+      "distinct_pk_count": 500
+    },
+    "cards": {
+      "row_count": 100000,
+      "columns": [
+        "card_id",
+        "account_id",
+        "card_type",
+        "expiration_date"
+      ],
+      "types": {
+        "card_id": "TEXT",
+        "account_id": "TEXT",
+        "card_type": "TEXT",
+        "expiration_date": "TIMESTAMP"
+      },
+      "null_counts": {
+        "card_id": 0,
+        "account_id": 0,
+        "card_type": 0,
+        "expiration_date": 0
+      },
+      "candidate_pk": "card_id",
+      "candidate_pk_unique": true,
+      "distinct_pk_count": 100000
+    },
+    "customers": {
+      "row_count": 50000,
+      "columns": [
+        "customer_id",
+        "first_name",
+        "last_name",
+        "email",
+        "city",
+        "credit_score",
+        "created_at"
+      ],
+      "types": {
+        "customer_id": "TEXT",
+        "first_name": "TEXT",
+        "last_name": "TEXT",
+        "email": "TEXT",
+        "city": "TEXT",
+        "credit_score": "INTEGER",
+        "created_at": "TIMESTAMP"
+      },
+      "null_counts": {
+        "customer_id": 0,
+        "first_name": 0,
+        "last_name": 0,
+        "email": 0,
+        "city": 0,
+        "credit_score": 0,
+        "created_at": 0
+      },
+      "candidate_pk": "customer_id",
+      "candidate_pk_unique": true,
+      "distinct_pk_count": 50000
+    },
+    "loans": {
+      "row_count": 30000,
+      "columns": [
+        "loan_id",
+        "customer_id",
+        "loan_amount",
+        "interest_rate",
+        "start_date"
+      ],
+      "types": {
+        "loan_id": "TEXT",
+        "customer_id": "TEXT",
+        "loan_amount": "REAL",
+        "interest_rate": "REAL",
+        "start_date": "TIMESTAMP"
+      },
+      "null_counts": {
+        "loan_id": 0,
+        "customer_id": 0,
+        "loan_amount": 0,
+        "interest_rate": 0,
+        "start_date": 0
+      },
+      "candidate_pk": "loan_id",
+      "candidate_pk_unique": true,
+      "distinct_pk_count": 30000
+    },
+    "merchants": {
+      "row_count": 5000,
+      "columns": [
+        "merchant_id",
+        "merchant_name",
+        "city"
+      ],
+      "types": {
+        "merchant_id": "TEXT",
+        "merchant_name": "TEXT",
+        "city": "TEXT"
+      },
+      "null_counts": {
+        "merchant_id": 0,
+        "merchant_name": 0,
+        "city": 0
+      },
+      "candidate_pk": "merchant_id",
+      "candidate_pk_unique": true,
+      "distinct_pk_count": 5000
+    },
+    "transactions": {
+      "row_count": 1000000,
+      "columns": [
+        "transaction_id",
+        "account_id",
+        "merchant_id",
+        "amount_usd",
+        "transaction_date"
+      ],
+      "types": {
+        "transaction_id": "TEXT",
+        "account_id": "TEXT",
+        "merchant_id": "TEXT",
+        "amount_usd": "REAL",
+        "transaction_date": "TIMESTAMP"
+      },
+      "null_counts": {
+        "transaction_id": 0,
+        "account_id": 0,
+        "merchant_id": 0,
+        "amount_usd": 0,
+        "transaction_date": 0
+      },
+      "candidate_pk": "transaction_id",
+      "candidate_pk_unique": true,
+      "distinct_pk_count": 1000000
+    }
+  },
+  "transactions_investigation": {
+    "present_in_sqlite": true,
+    "row_count": 1000000,
+    "columns": [
+      "transaction_id",
+      "account_id",
+      "merchant_id",
+      "amount_usd",
+      "transaction_date"
+    ],
+    "date_min": "2019-01-01 00:00:23",
+    "date_max": "2025-12-31 23:55:27",
+    "amount_min": 1.02,
+    "amount_max": 9999.98,
+    "amount_avg": 5001.16
+  },
+  "branches_forensic_note": {
+    "total_rows": 500,
+    "city_non_null": 0,
+    "country_non_null": 0,
+    "note": "SQLite branches table has 100% NULL for city and country, whereas branches_inserts.sql has city and country populated."
+  },
+  "relational_model": [
+    {
+      "parent": "customers",
+      "parent_key": "customer_id",
+      "child": "accounts",
+      "child_key": "customer_id",
+      "type": "one-to-many"
+    },
+    {
+      "parent": "customers",
+      "parent_key": "customer_id",
+      "child": "loans",
+      "child_key": "customer_id",
+      "type": "one-to-many"
+    },
+    {
+      "parent": "accounts",
+      "parent_key": "account_id",
+      "child": "cards",
+      "child_key": "account_id",
+      "type": "one-to-many"
+    },
+    {
+      "parent": "accounts",
+      "parent_key": "account_id",
+      "child": "transactions",
+      "child_key": "account_id",
+      "type": "one-to-many"
+    },
+    {
+      "parent": "merchants",
+      "parent_key": "merchant_id",
+      "child": "transactions",
+      "child_key": "merchant_id",
+      "type": "one-to-many"
+    },
+    {
+      "parent": "branches",
+      "parent_key": "branch_id",
+      "child": "unlinked",
+      "child_key": "none",
+      "type": "isolated_table",
+      "note": "No branch_id in accounts/loans/customers. City-based implicit mapping possible."
+    }
+  ],
+  "major_data_quality_issues": [
+    {
+      "entity": "branches (sqlite)",
+      "issue": "city and country columns are 100% NULL (0/500 populated). branches_inserts.sql has them fully populated."
+    },
+    {
+      "entity": "transactions",
+      "issue": "No transactions.csv exists; transactions only exist in bank_sqlite.db (1,000,000 rows) and transactions_inserts.sql (189.58 MB)."
+    },
+    {
+      "entity": "dataset divergence",
+      "issue": "The individual CSV files and bank_sqlite.db represent different random seeds/runs of the Kaggle generator. bank_sqlite.db is internally consistent across all 7 tables."
+    },
+    {
+      "entity": "branches linkage",
+      "issue": "branches table has no foreign key reference in any other table (accounts, loans, customers lack branch_id)."
+    }
+  ]
+}
