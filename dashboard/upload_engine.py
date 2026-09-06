@@ -261,11 +261,35 @@ def ingest_csv(file_or_buffer, original_filename: str, session_id: str | None = 
     }
 
 
+def table_exists_in_db(table_name: str, schema: str = UPLOAD_SCHEMA) -> bool:
+    """
+    Verify physical existence of a table in PostgreSQL information_schema.
+    Returns True only if the table physically exists right now.
+    """
+    if not table_name or not re.match(r"^[a-zA-Z0-9_]+$", table_name):
+        return False
+    engine = get_engine()
+    query = text("""
+        SELECT 1 
+        FROM information_schema.tables 
+        WHERE table_schema = :schema AND table_name = :table_name 
+        LIMIT 1;
+    """)
+    try:
+        with engine.connect() as conn:
+            res = conn.execute(query, {"schema": schema, "table_name": table_name}).scalar()
+            return bool(res)
+    except Exception:
+        return False
+
+
 def get_all_uploaded_tables(allowed_tables: list[str] | None = None) -> pd.DataFrame:
     """
     Fetch tracked uploads from the metadata table.
-    When allowed_tables is provided (session whitelist), strictly filters to return
-    ONLY tables uploaded in the active session. If allowed_tables is empty, returns empty DataFrame.
+    Guarantees:
+    1. Strictly filters to only tables uploaded in the active session (allowed_tables).
+    2. Strictly cross-verifies that every returned table physically exists in PostgreSQL.
+    3. Prunes stale metadata if a physical table was dropped.
     """
     ensure_upload_schema_and_metadata()
     engine = get_engine()
@@ -287,6 +311,11 @@ def get_all_uploaded_tables(allowed_tables: list[str] | None = None) -> pd.DataF
                 uploaded_at
             FROM {UPLOAD_SCHEMA}.{METADATA_TABLE}
             WHERE table_name IN ({placeholders})
+              AND table_name IN (
+                  SELECT table_name 
+                  FROM information_schema.tables 
+                  WHERE table_schema = '{UPLOAD_SCHEMA}'
+              )
             ORDER BY upload_id DESC;
         """
     else:
@@ -301,6 +330,11 @@ def get_all_uploaded_tables(allowed_tables: list[str] | None = None) -> pd.DataF
                 ROUND(file_size_bytes / 1024.0, 1) AS size_kb,
                 uploaded_at
             FROM {UPLOAD_SCHEMA}.{METADATA_TABLE}
+            WHERE table_name IN (
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = '{UPLOAD_SCHEMA}'
+            )
             ORDER BY upload_id DESC;
         """
         params = {}
@@ -315,12 +349,17 @@ def get_all_uploaded_tables(allowed_tables: list[str] | None = None) -> pd.DataF
 def get_uploaded_table_data(table_name: str, limit: int = 100, allowed_tables: list[str] | None = None) -> pd.DataFrame:
     """
     Safely query an uploaded table from the uploads schema.
-    Validates table_name against alphanumeric underscore pattern and session access whitelist.
+    Validates:
+    1. Table identifier format.
+    2. Session access whitelist (allowed_tables).
+    3. Physical table existence in PostgreSQL.
     """
     if not re.match(r"^[a-zA-Z0-9_]+$", table_name):
         raise ValueError("Invalid table identifier.")
     if allowed_tables is not None and table_name not in allowed_tables:
         raise PermissionError(f"Access denied: table '{table_name}' does not belong to the current session.")
+    if not table_exists_in_db(table_name, UPLOAD_SCHEMA):
+        raise FileNotFoundError(f"Table '{table_name}' does not exist in PostgreSQL schema '{UPLOAD_SCHEMA}'.")
         
     engine = get_engine()
     query = f'SELECT * FROM "{UPLOAD_SCHEMA}"."{table_name}" LIMIT :limit;'

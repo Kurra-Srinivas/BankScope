@@ -248,13 +248,54 @@ class OfflineBankingSQLProvider(BaseLLMProvider):
             tbl_match = re.search(r"Target Table:\s*`uploads\.([a-zA-Z0-9_]+)`", system_instruction) or re.search(r"uploads\.([a-zA-Z0-9_]+)", system_instruction)
             target_tbl = f"uploads.{tbl_match.group(1)}" if tbl_match else "uploads.dataset"
             
-            if "status" in q_lower or "card_status" in q_lower:
+            if "segment" in q_lower or "customer_segment" in q_lower:
+                return (
+                    f"SELECT \n"
+                    f"    customer_segment,\n"
+                    f"    COUNT(*) AS card_count,\n"
+                    f"    ROUND(AVG(credit_limit)::numeric, 2) AS avg_credit_limit,\n"
+                    f"    ROUND(SUM(monthly_spend)::numeric, 2) AS total_monthly_spend\n"
+                    f"FROM {target_tbl}\n"
+                    f"GROUP BY customer_segment\n"
+                    f"ORDER BY avg_credit_limit DESC;"
+                )
+            elif "spend" in q_lower and "status" in q_lower:
+                return (
+                    f"SELECT \n"
+                    f"    card_status,\n"
+                    f"    ROUND(SUM(monthly_spend)::numeric, 2) AS total_monthly_spend,\n"
+                    f"    ROUND(AVG(monthly_spend)::numeric, 2) AS avg_monthly_spend\n"
+                    f"FROM {target_tbl}\n"
+                    f"GROUP BY card_status\n"
+                    f"ORDER BY total_monthly_spend DESC;"
+                )
+            elif "utilization" in q_lower:
+                return (
+                    f"SELECT \n"
+                    f"    card_type,\n"
+                    f"    COUNT(*) AS count,\n"
+                    f"    ROUND(AVG(utilization_pct)::numeric, 4) AS avg_utilization_pct\n"
+                    f"FROM {target_tbl}\n"
+                    f"GROUP BY card_type\n"
+                    f"ORDER BY avg_utilization_pct DESC;"
+                )
+            elif "percent" in q_lower or "percentage" in q_lower:
+                return (
+                    f"SELECT \n"
+                    f"    card_status,\n"
+                    f"    COUNT(*) AS card_count,\n"
+                    f"    ROUND((COUNT(*) * 100.0 / SUM(COUNT(*)) OVER ())::numeric, 2) AS percentage\n"
+                    f"FROM {target_tbl}\n"
+                    f"GROUP BY card_status\n"
+                    f"ORDER BY card_count DESC;"
+                )
+            elif "status" in q_lower or "card_status" in q_lower:
                 return (
                     f"SELECT \n"
                     f"    card_status,\n"
                     f"    COUNT(*) AS total_cards,\n"
-                    f"    ROUND(AVG(credit_limit), 2) AS avg_credit_limit,\n"
-                    f"    ROUND(SUM(credit_limit), 2) AS total_credit_limit\n"
+                    f"    ROUND(AVG(credit_limit)::numeric, 2) AS avg_credit_limit,\n"
+                    f"    ROUND(SUM(credit_limit)::numeric, 2) AS total_credit_limit\n"
                     f"FROM {target_tbl}\n"
                     f"GROUP BY card_status\n"
                     f"ORDER BY avg_credit_limit DESC;"
@@ -262,13 +303,13 @@ class OfflineBankingSQLProvider(BaseLLMProvider):
             elif "limit" in q_lower or "credit limit" in q_lower:
                 return (
                     f"SELECT \n"
-                    f"    card_type,\n"
-                    f"    COUNT(*) AS count,\n"
-                    f"    ROUND(AVG(credit_limit), 2) AS avg_limit,\n"
-                    f"    ROUND(MAX(credit_limit), 2) AS max_limit\n"
+                    f"    customer_segment,\n"
+                    f"    ROUND(SUM(credit_limit)::numeric, 2) AS total_credit_limit,\n"
+                    f"    ROUND(AVG(credit_limit)::numeric, 2) AS avg_credit_limit\n"
                     f"FROM {target_tbl}\n"
-                    f"GROUP BY card_type\n"
-                    f"ORDER BY avg_limit DESC;"
+                    f"GROUP BY customer_segment\n"
+                    f"ORDER BY total_credit_limit DESC\n"
+                    f"LIMIT 10;"
                 )
             else:
                 return (

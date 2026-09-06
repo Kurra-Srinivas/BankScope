@@ -74,6 +74,62 @@ def clean_sql(raw_text: str) -> str:
     return result if result else text_content.strip()
 
 
+def repair_postgres_numeric_casts(sql: str) -> str:
+    """
+    Repair PostgreSQL numeric/double precision type casting issues in generated SQL.
+    PostgreSQL only supports round(numeric, integer), NOT round(double precision, integer).
+    When expressions like AVG(col), SUM(col), or arithmetic inside ROUND(...) are not cast,
+    PostgreSQL throws 'function round(double precision, integer) does not exist'.
+    This function parses balanced parentheses inside ROUND(expr, n) and wraps expr in ::numeric
+    unless it is already cast.
+    """
+    if not sql or "ROUND" not in sql.upper():
+        return sql
+
+    result = []
+    i = 0
+    n = len(sql)
+    while i < n:
+        match = re.search(r'\bROUND\s*\(', sql[i:], re.IGNORECASE)
+        if not match:
+            result.append(sql[i:])
+            break
+        
+        start = i + match.start()
+        result.append(sql[i:start])
+        open_paren_idx = i + match.end() - 1
+        paren_depth = 1
+        j = open_paren_idx + 1
+        comma_pos = -1
+        while j < n and paren_depth > 0:
+            if sql[j] == '(':
+                paren_depth += 1
+            elif sql[j] == ')':
+                paren_depth -= 1
+            elif sql[j] == ',' and paren_depth == 1:
+                comma_pos = j
+            j += 1
+        
+        if paren_depth == 0 and comma_pos != -1:
+            expr = sql[open_paren_idx + 1:comma_pos].strip()
+            decimals = sql[comma_pos + 1:j - 1].strip()
+            if decimals.isdigit():
+                expr_lower = expr.lower()
+                if '::numeric' not in expr_lower and 'as numeric' not in expr_lower:
+                    if expr.startswith('(') and expr.endswith(')'):
+                        expr = expr[1:-1].strip()
+                    result.append(f'ROUND(({expr})::numeric, {decimals})')
+                else:
+                    result.append(sql[start:j])
+            else:
+                result.append(sql[start:j])
+            i = j
+        else:
+            result.append(sql[start:open_paren_idx + 1])
+            i = open_paren_idx + 1
+    return ''.join(result)
+
+
 import sqlparse
 
 
@@ -141,6 +197,14 @@ def validate_with_postgres_explain(sql: str) -> tuple[bool, str]:
     if not is_safe:
         return False, sec_err
 
+    # Verify physical existence of any referenced upload table
+    upload_tbl_matches = re.findall(r'\buploads\.([a-zA-Z0-9_]+)\b', sql, re.IGNORECASE)
+    if upload_tbl_matches:
+        from dashboard.upload_engine import table_exists_in_db
+        for tbl in upload_tbl_matches:
+            if not table_exists_in_db(tbl, "uploads"):
+                return False, f"Target table 'uploads.{tbl}' does not exist in PostgreSQL. Please re-upload your dataset."
+
     from dashboard.db import get_readonly_engine
     cleaned = sql.strip().rstrip(";")
     explain_query = f"EXPLAIN (FORMAT TEXT) {cleaned};"
@@ -164,9 +228,10 @@ def execute_approved_sql(sql: str, max_rows: int = 500) -> dict:
     Execute user-approved SQL on the dedicated read-only PostgreSQL connection.
     Guarantees:
     1. Static & sqlparse security validation.
-    2. Zero write permissions (PostgreSQL default_transaction_read_only=on).
-    3. Truncation to max_rows.
-    4. 10s execution timeout.
+    2. Physical target table existence.
+    3. Zero write permissions (PostgreSQL default_transaction_read_only=on).
+    4. Truncation to max_rows.
+    5. 10s execution timeout.
 
     Returns:
         {
@@ -188,6 +253,21 @@ def execute_approved_sql(sql: str, max_rows: int = 500) -> dict:
             "error_message": sec_err,
             "sql_executed": sql,
         }
+
+    # Verify physical existence of any referenced upload table
+    upload_tbl_matches = re.findall(r'\buploads\.([a-zA-Z0-9_]+)\b', sql, re.IGNORECASE)
+    if upload_tbl_matches:
+        from dashboard.upload_engine import table_exists_in_db
+        for tbl in upload_tbl_matches:
+            if not table_exists_in_db(tbl, "uploads"):
+                return {
+                    "success": False,
+                    "df": pd.DataFrame(),
+                    "row_count": 0,
+                    "execution_time_ms": 0.0,
+                    "error_message": f"Target table 'uploads.{tbl}' does not exist in PostgreSQL. Please re-upload your dataset.",
+                    "sql_executed": sql,
+                }
 
     from dashboard.db import execute_readonly_query
 
@@ -229,6 +309,11 @@ def get_dataset_schema_context(dataset_choice: str) -> dict:
     table_name = dataset_choice.replace("upload:", "").strip()
     if not re.match(r"^[a-zA-Z0-9_]+$", table_name):
         raise ValueError("Invalid table identifier.")
+        
+    from dashboard.upload_engine import table_exists_in_db
+    if not table_exists_in_db(table_name, "uploads"):
+        raise FileNotFoundError(f"Target table 'uploads.{table_name}' does not exist in PostgreSQL. Please re-upload your dataset.")
+        
     engine = get_engine()
     
     query = """
@@ -279,10 +364,11 @@ Important: Always reference this table with schema qualification: `uploads.{tabl
 def generate_sql_query(question: str, dataset_choice: str, provider: BaseLLMProvider = None) -> dict:
     """
     End-to-end SQL generation:
-    1. Resolve schema context.
-    2. Format prompt and system rules.
-    3. Invoke LLM provider.
-    4. Clean output and enforce security validation.
+    1. Resolve schema context (validates physical table existence).
+    2. Format prompt and system rules (instructing ::numeric casts on AVG/SUM/ROUND).
+    3. Invoke LLM provider (Groq primary / fallback).
+    4. Clean output and repair numeric casts.
+    5. Enforce static security validation.
     Returns result dict with SQL, validation status, and metadata.
     """
     if provider is None:
@@ -300,7 +386,10 @@ Strict Rules:
 3. Use proper PostgreSQL syntax:
    - For monthly dates: DATE_TRUNC('month', date_col)::DATE
    - For window ranking: DENSE_RANK() OVER (ORDER BY ...) or ROW_NUMBER()
-   - For rounding monetary amounts: ROUND(val, 2)
+   - For rounding monetary amounts and averages: In PostgreSQL, ROUND(val, n) strictly requires numeric type.
+     When rounding AVG, SUM, division, or floating-point columns, ALWAYS cast to ::numeric before rounding!
+     Example: ROUND(AVG(col)::numeric, 2), ROUND(SUM(col)::numeric, 2), ROUND((val * 100.0 / total)::numeric, 2).
+     NEVER write ROUND(AVG(col), 2) because round(double precision, integer) does not exist in PostgreSQL!
    - For string concatenation: first_name || ' ' || last_name
 4. Do NOT hallucinate tables or columns not present in the provided schema.
 5. If tables from the uploads schema are used, qualify them explicitly with `uploads.<table_name>`.
@@ -323,7 +412,8 @@ Strict Rules:
             raise api_err
 
     clean_query = clean_sql(raw_response)
-    is_valid, validation_msg = validate_sql_security(clean_query)
+    repaired_query = repair_postgres_numeric_casts(clean_query)
+    is_valid, validation_msg = validate_sql_security(repaired_query)
     
     return {
         "question": question,
@@ -332,7 +422,7 @@ Strict Rules:
         "schema_context": schema_info["context_string"],
         "provider_name": provider_name,
         "raw_response": raw_response,
-        "sql": clean_query,
+        "sql": repaired_query,
         "is_valid": is_valid,
         "validation_message": validation_msg,
     }

@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if BASE_DIR not in sys.path:
@@ -33,6 +34,7 @@ from dashboard.upload_engine import (
     get_uploaded_table_data,
     profile_dataframe,
     delete_uploaded_table,
+    table_exists_in_db,
 )
 from dashboard.sql_generator import (
     generate_sql_query,
@@ -642,6 +644,13 @@ elif section == "6. Upload & Explore Data":
                 st.error(f"❌ {err_msg}")
             else:
                 file_key = f"uploaded_{uploaded_file.name}_{uploaded_file.size}"
+                if file_key in st.session_state:
+                    cached_tbl = st.session_state[file_key].get("table_name", "")
+                    if not table_exists_in_db(cached_tbl):
+                        del st.session_state[file_key]
+                        if cached_tbl in st.session_state.get("session_uploaded_tables", []):
+                            st.session_state["session_uploaded_tables"].remove(cached_tbl)
+
                 if file_key not in st.session_state:
                     with st.spinner("Analyzing CSV structure and ingesting into PostgreSQL..."):
                         try:
@@ -755,8 +764,21 @@ elif section == "6. Upload & Explore Data":
                 if st.button("🗑️ Delete Dataset", help="Permanently drop this table and remove its data from PostgreSQL"):
                     try:
                         delete_uploaded_table(selected_table)
-                        if selected_table in st.session_state["session_uploaded_tables"]:
+                        if selected_table in st.session_state.get("session_uploaded_tables", []):
                             st.session_state["session_uploaded_tables"].remove(selected_table)
+                        # Clean any cached file_key pointing to this table
+                        for k in list(st.session_state.keys()):
+                            if k.startswith("uploaded_"):
+                                val = st.session_state[k]
+                                if isinstance(val, dict) and val.get("table_name") == selected_table:
+                                    del st.session_state[k]
+                        # Clean NL-SQL state if it referenced this table
+                        if "nl_sql_result" in st.session_state and selected_table in str(st.session_state["nl_sql_result"]):
+                            del st.session_state["nl_sql_result"]
+                        if "edited_sql" in st.session_state and selected_table in str(st.session_state["edited_sql"]):
+                            del st.session_state["edited_sql"]
+                        if "nl_exec_result" in st.session_state:
+                            del st.session_state["nl_exec_result"]
                         st.success(f"Deleted dataset '{selected_table}'.")
                         st.rerun()
                     except Exception as del_err:
@@ -785,10 +807,15 @@ elif section == "7. Ask Your Data":
     st.markdown('<div class="main-title">Ask Your Data</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-title">Synthesize schema-aware, read-only PostgreSQL queries from plain English questions across core banking tables and uploaded datasets.</div>', unsafe_allow_html=True)
 
-    # 1. Dataset Selection
+    # 1. Dataset Selection & Session Synchronization
     st.markdown('<div class="section-header">1. Select Target Dataset</div>', unsafe_allow_html=True)
     
-    session_tables = st.session_state.get("session_uploaded_tables", [])
+    # Synchronize session-scoped upload tracking with physical database reality
+    raw_session_tables = st.session_state.get("session_uploaded_tables", [])
+    session_tables = [t for t in raw_session_tables if table_exists_in_db(t)]
+    if len(session_tables) != len(raw_session_tables):
+        st.session_state["session_uploaded_tables"] = session_tables
+
     uploaded_meta = get_all_uploaded_tables(allowed_tables=session_tables)
     dataset_options = ["BankScope Banking Data"]
     if not uploaded_meta.empty:
@@ -802,6 +829,31 @@ elif section == "7. Ask Your Data":
             dataset_options,
             format_func=lambda d: "🏦 BankScope Core Warehouse (7 Tables, 1.26M rows)" if d == "BankScope Banking Data" else f"📁 Uploaded: {d.replace('upload:', '')} ({uploaded_meta[uploaded_meta['table_name'] == d.replace('upload:', '')]['original_filename'].values[0]})"
         )
+
+    # Detect if selected uploaded dataset physically disappeared
+    if selected_dataset.startswith("upload:"):
+        target_check = selected_dataset.replace("upload:", "").strip()
+        if not table_exists_in_db(target_check):
+            st.error(f"⚠️ Uploaded dataset `{target_check}` is no longer available in PostgreSQL. Please re-upload it.")
+            if target_check in st.session_state.get("session_uploaded_tables", []):
+                st.session_state["session_uploaded_tables"].remove(target_check)
+            if "nl_sql_result" in st.session_state:
+                del st.session_state["nl_sql_result"]
+            if "edited_sql" in st.session_state:
+                del st.session_state["edited_sql"]
+            if "nl_exec_result" in st.session_state:
+                del st.session_state["nl_exec_result"]
+            st.rerun()
+
+    # Clear active query state if user switched to a different dataset in dropdown
+    if "nl_sql_result" in st.session_state:
+        if st.session_state["nl_sql_result"].get("dataset_choice") != selected_dataset:
+            del st.session_state["nl_sql_result"]
+            if "edited_sql" in st.session_state:
+                del st.session_state["edited_sql"]
+            if "nl_exec_result" in st.session_state:
+                del st.session_state["nl_exec_result"]
+
     with col_provider:
         llm_provider = get_llm_provider()
         is_offline = isinstance(llm_provider, OfflineBankingSQLProvider)
@@ -847,10 +899,11 @@ elif section == "7. Ask Your Data":
         ]
     else:
         sample_questions = [
-            "What is the total record count in this dataset?",
-            "What is the average balance and credit limit across all accounts?",
-            "Are there any duplicate card records in this dataset?",
-            "How many cards are in each status category?"
+            "What is the average credit limit by customer segment?",
+            "Which card status has the highest total monthly spend?",
+            "Compare average utilization percentage between credit and debit cards.",
+            "Show the top 10 customer segments by total credit limit.",
+            "What percentage of cards are active, blocked, and closed?"
         ]
 
     st.markdown("<span style='color:#94A3B8; font-size:0.85rem;'>💡 Example questions to try:</span>", unsafe_allow_html=True)
@@ -883,6 +936,12 @@ elif section == "7. Ask Your Data":
             with st.spinner(f"Synthesizing PostgreSQL query via {llm_provider.name}..."):
                 try:
                     res = generate_sql_query(user_question, selected_dataset, provider=llm_provider)
+                except FileNotFoundError as fnf_err:
+                    st.error(f"⚠️ {str(fnf_err)}")
+                    target_tbl = selected_dataset.replace("upload:", "").strip()
+                    if target_tbl in st.session_state.get("session_uploaded_tables", []):
+                        st.session_state["session_uploaded_tables"].remove(target_tbl)
+                    st.rerun()
                 except Exception as gen_err:
                     st.warning(f"⚠️ {llm_provider.name} error: {str(gen_err)}. Falling back to Rule-Based Demo Synthesis.")
                     fallback_prov = OfflineBankingSQLProvider()
@@ -914,15 +973,28 @@ elif section == "7. Ask Your Data":
         is_sec_valid, sec_msg = validate_sql_security(edited_sql)
         explain_valid = False
         explain_msg = ""
-        if is_sec_valid:
-            explain_valid, explain_msg = validate_with_postgres_explain(edited_sql)
+        
+        # Check target table existence for uploaded tables
+        upload_ref_matches = re.findall(r'\buploads\.([a-zA-Z0-9_]+)\b', edited_sql, re.IGNORECASE)
+        table_exists = True
+        missing_tbl_name = ""
+        if upload_ref_matches:
+            for ut in upload_ref_matches:
+                if not table_exists_in_db(ut):
+                    table_exists = False
+                    missing_tbl_name = ut
+                    break
 
-        if is_sec_valid and explain_valid:
-            st.success(f"🛡️ **Validation Passed**: Query plan verified by PostgreSQL. Read-only execution permitted on `{res['dataset_name']}`.")
+        if not table_exists:
+            st.error(f"🚨 **Target Table Missing**: Uploaded table `uploads.{missing_tbl_name}` is no longer available in PostgreSQL. Please re-upload your dataset.")
         elif not is_sec_valid:
             st.error(f"🚨 **Security Policy Violation**: {sec_msg}")
         else:
-            st.warning(f"⚠️ **PostgreSQL Catalog/Planner Notice**: {explain_msg}")
+            explain_valid, explain_msg = validate_with_postgres_explain(edited_sql)
+            if explain_valid:
+                st.success(f"🛡️ **Validation Passed**: Query plan verified by PostgreSQL. Read-only execution permitted on `{res['dataset_name']}`.")
+            else:
+                st.warning(f"⚠️ **PostgreSQL Catalog/Planner Notice**: {explain_msg}")
 
         # 4. Human-in-the-Loop Execution Gate
         st.markdown('<div class="section-header">4. Approval & Read-Only Execution</div>', unsafe_allow_html=True)
@@ -944,7 +1016,7 @@ elif section == "7. Ask Your Data":
                 unsafe_allow_html=True
             )
         with col_gate_btn:
-            can_execute = is_sec_valid and explain_valid
+            can_execute = is_sec_valid and explain_valid and table_exists
             approve_and_run = st.button(
                 "🚀 Approve & Run",
                 type="primary",
