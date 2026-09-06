@@ -32,6 +32,7 @@ from dashboard.upload_engine import (
     get_all_uploaded_tables,
     get_uploaded_table_data,
     profile_dataframe,
+    delete_uploaded_table,
 )
 from dashboard.sql_generator import (
     generate_sql_query,
@@ -41,7 +42,11 @@ from dashboard.sql_generator import (
     execute_approved_sql,
 )
 from dashboard.sql_visualizer import generate_result_visualization
-from dashboard.llm_provider import get_llm_provider, OfflineBankingSQLProvider
+from dashboard.llm_provider import (
+    get_llm_provider, 
+    OfflineBankingSQLProvider,
+    GroqProvider,
+)
 from dashboard.db import test_db_connection
 
 # Page Configuration
@@ -51,6 +56,14 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Initialize session-scoped upload tracking
+if "session_id" not in st.session_state:
+    import uuid
+    st.session_state["session_id"] = uuid.uuid4().hex[:8]
+
+if "session_uploaded_tables" not in st.session_state:
+    st.session_state["session_uploaded_tables"] = []
 
 # Custom Styling (CSS) - High Contrast & Dark Theme Accessible
 st.markdown(
@@ -632,8 +645,12 @@ elif section == "6. Upload & Explore Data":
                 if file_key not in st.session_state:
                     with st.spinner("Analyzing CSV structure and ingesting into PostgreSQL..."):
                         try:
-                            result = ingest_csv(uploaded_file, uploaded_file.name)
+                            result = ingest_csv(uploaded_file, uploaded_file.name, session_id=st.session_state["session_id"])
                             st.session_state[file_key] = result
+                            if result and result.get("status") == "SUCCESS":
+                                tbl_name = result["table_name"]
+                                if tbl_name not in st.session_state["session_uploaded_tables"]:
+                                    st.session_state["session_uploaded_tables"].append(tbl_name)
                         except Exception as e:
                             st.error(f"❌ Ingestion failed: {str(e)}")
                             result = None
@@ -719,19 +736,33 @@ elif section == "6. Upload & Explore Data":
 
     with tab_explore:
         st.markdown('<div class="section-header">Explore Ingested PostgreSQL Tables</div>', unsafe_allow_html=True)
-        uploaded_meta = get_all_uploaded_tables()
+        session_tables = st.session_state.get("session_uploaded_tables", [])
+        uploaded_meta = get_all_uploaded_tables(allowed_tables=session_tables)
 
         if uploaded_meta.empty:
-            st.info("ℹ️ No custom datasets uploaded yet. Upload a CSV in the tab above to explore it here.")
+            st.info("ℹ️ No custom datasets uploaded in this session yet. Upload a CSV in the tab above to explore and analyze it here.")
         else:
             table_choices = uploaded_meta["table_name"].tolist()
-            selected_table = st.selectbox(
-                "Select an ingested table to explore:",
-                table_choices,
-                format_func=lambda t: f"{t} ({uploaded_meta[uploaded_meta['table_name'] == t]['original_filename'].values[0]})"
-            )
+            col_tbl_sel, col_tbl_del = st.columns([3, 1])
+            with col_tbl_sel:
+                selected_table = st.selectbox(
+                    "Select an ingested table to explore:",
+                    table_choices,
+                    format_func=lambda t: f"{t} ({uploaded_meta[uploaded_meta['table_name'] == t]['original_filename'].values[0]})"
+                )
+            with col_tbl_del:
+                st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
+                if st.button("🗑️ Delete Dataset", help="Permanently drop this table and remove its data from PostgreSQL"):
+                    try:
+                        delete_uploaded_table(selected_table)
+                        if selected_table in st.session_state["session_uploaded_tables"]:
+                            st.session_state["session_uploaded_tables"].remove(selected_table)
+                        st.success(f"Deleted dataset '{selected_table}'.")
+                        st.rerun()
+                    except Exception as del_err:
+                        st.error(f"Deletion failed: {del_err}")
 
-            if selected_table:
+            if selected_table and selected_table in table_choices:
                 meta_row = uploaded_meta[uploaded_meta["table_name"] == selected_table].iloc[0]
                 
                 m1, m2, m3, m4 = st.columns(4)
@@ -740,10 +771,10 @@ elif section == "6. Upload & Explore Data":
                 m3.metric("Columns", f"{meta_row['column_count']}")
                 m4.metric("File Size", f"{meta_row['size_kb']} KB")
 
-                st.markdown(f"**PostgreSQL Target**: `uploads.{selected_table}` | **Uploaded At**: `{meta_row['uploaded_at']}`")
+                st.markdown(f"**PostgreSQL Target**: `uploads.{selected_table}` | **Uploaded At**: `{meta_row['uploaded_at']}` | **Scope**: `Session-Isolated`")
                 
                 with st.spinner("Fetching table records..."):
-                    df_sample = get_uploaded_table_data(selected_table, limit=100)
+                    df_sample = get_uploaded_table_data(selected_table, limit=100, allowed_tables=session_tables)
                     st.dataframe(df_sample, use_container_width=True)
 
 
@@ -757,7 +788,8 @@ elif section == "7. Ask Your Data":
     # 1. Dataset Selection
     st.markdown('<div class="section-header">1. Select Target Dataset</div>', unsafe_allow_html=True)
     
-    uploaded_meta = get_all_uploaded_tables()
+    session_tables = st.session_state.get("session_uploaded_tables", [])
+    uploaded_meta = get_all_uploaded_tables(allowed_tables=session_tables)
     dataset_options = ["BankScope Banking Data"]
     if not uploaded_meta.empty:
         for _, r in uploaded_meta.iterrows():
@@ -773,9 +805,20 @@ elif section == "7. Ask Your Data":
     with col_provider:
         llm_provider = get_llm_provider()
         is_offline = isinstance(llm_provider, OfflineBankingSQLProvider)
-        badge_header = "DEMO SYNTHESIS ENGINE" if is_offline else "ACTIVE LLM PROVIDER"
-        badge_title = f"💡 {llm_provider.name} (Rule-Based Synthesis)" if is_offline else f"⚡ {llm_provider.name} (Live API)"
-        badge_color = "#FBBF24" if is_offline else "#60A5FA"
+        is_groq = isinstance(llm_provider, GroqProvider)
+        if is_offline:
+            badge_header = "DEMO SYNTHESIS ENGINE (NON-AI)"
+            badge_title = f"💡 {llm_provider.name}"
+            badge_color = "#FBBF24"
+        elif is_groq:
+            badge_header = "ACTIVE AI PROVIDER (GROQ)"
+            badge_title = f"⚡ Groq ({getattr(llm_provider, 'model', 'openai/gpt-oss-20b')})"
+            badge_color = "#34D399"
+        else:
+            badge_header = "ACTIVE AI PROVIDER"
+            badge_title = f"⚡ {llm_provider.name} ({getattr(llm_provider, 'model', 'Live API')})"
+            badge_color = "#60A5FA"
+
         st.markdown(
             f"""
             <div style="background:#1E293B; border:1px solid #334155; border-radius:8px; padding:8px 12px; margin-top:24px;">
@@ -838,7 +881,12 @@ elif section == "7. Ask Your Data":
             st.warning("⚠️ Please enter a question before generating SQL.")
         else:
             with st.spinner(f"Synthesizing PostgreSQL query via {llm_provider.name}..."):
-                res = generate_sql_query(user_question, selected_dataset, provider=llm_provider)
+                try:
+                    res = generate_sql_query(user_question, selected_dataset, provider=llm_provider)
+                except Exception as gen_err:
+                    st.warning(f"⚠️ {llm_provider.name} error: {str(gen_err)}. Falling back to Rule-Based Demo Synthesis.")
+                    fallback_prov = OfflineBankingSQLProvider()
+                    res = generate_sql_query(user_question, selected_dataset, provider=fallback_prov)
                 st.session_state["nl_sql_result"] = res
                 st.session_state["edited_sql"] = res["sql"]
                 # Invalidate any previous execution result when query is regenerated

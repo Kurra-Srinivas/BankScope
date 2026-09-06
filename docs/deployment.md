@@ -115,14 +115,18 @@ DB_PASSWORD = "your_neon_password"
 DB_SSLMODE = "require"
 
 # Optional LLM API Settings (Live Natural Language SQL Generation)
-# If neither key is provided, BankScope runs in Offline Demo Synthesis Mode
+# Groq is the primary high-throughput LLM provider
+GROQ_API_KEY = "gsk_..."
+GROQ_MODEL = "openai/gpt-oss-20b"
+LLM_PROVIDER = "groq" # Options: 'groq', 'gemini', 'openai', or 'offline'
+
+# Alternative Providers (Optional)
 GEMINI_API_KEY = "AIzaSy..."
 OPENAI_API_KEY = "sk-..."
-LLM_PROVIDER = "gemini" # Options: 'gemini', 'openai', or 'offline'
 ```
 
 ### Option B: Sectioned TOML Table
-BankScope also recognizes standard `[postgres]` and `[connections.postgresql]` sections:
+BankScope also recognizes standard `[postgres]` and `[llm]` / `[groq]` sections:
 
 ```toml
 [postgres]
@@ -134,9 +138,9 @@ password = "your_neon_password"
 sslmode = "require"
 
 [llm]
-gemini_api_key = "AIzaSy..."
-openai_api_key = "sk-..."
-provider = "gemini"
+groq_api_key = "gsk_..."
+groq_model = "openai/gpt-oss-20b"
+provider = "groq"
 ```
 
 ---
@@ -151,9 +155,11 @@ provider = "gemini"
 | `DB_USER` | string | **Yes** | Database username | `postgres` |
 | `DB_PASSWORD` | string | **Yes** | Database user password (URL-encoded automatically) | `""` |
 | `DB_SSLMODE` | string | **Yes (Cloud)** | SSL verification mode (`require` for Neon, `prefer`, `disable`) | `None` (Local) / `require` (Cloud) |
-| `GEMINI_API_KEY` | string | Optional | Google Gemini API key for live NL-SQL generation | `None` |
-| `OPENAI_API_KEY` | string | Optional | OpenAI API key for live NL-SQL generation | `None` |
-| `LLM_PROVIDER` | string | Optional | Override active LLM engine (`gemini`, `openai`, `offline`) | Auto-detect |
+| `GROQ_API_KEY` | string | Optional | Groq API key for primary NL-SQL generation | `None` |
+| `GROQ_MODEL` | string | Optional | Groq LLM model name | `openai/gpt-oss-20b` |
+| `GEMINI_API_KEY` | string | Optional | Google Gemini API key for fallback live NL-SQL generation | `None` |
+| `OPENAI_API_KEY` | string | Optional | OpenAI API key for fallback live NL-SQL generation | `None` |
+| `LLM_PROVIDER` | string | Optional | Override active LLM engine (`groq`, `gemini`, `openai`, `offline`) | Auto-detect (Groq first) |
 
 ---
 

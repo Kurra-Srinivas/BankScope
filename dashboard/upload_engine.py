@@ -1,7 +1,7 @@
 """
 BankScope — CSV Upload & Exploration Engine
 Handles secure validation, profiling, sanitization, and ingestion of custom CSV datasets
-into an isolated PostgreSQL schema ('uploads').
+into an isolated PostgreSQL schema ('uploads') with strict session-scoped access control.
 """
 
 import os
@@ -25,14 +25,10 @@ def sanitize_identifier(name: str, max_length: int = 60) -> str:
     if not name:
         return "unnamed_col"
     
-    # Strip whitespace and lowercase
     cleaned = name.strip().lower()
-    # Replace non-alphanumeric characters with underscore
     cleaned = re.sub(r"[^a-z0-9_]+", "_", cleaned)
-    # Collapse multiple underscores
     cleaned = re.sub(r"_+", "_", cleaned).strip("_")
     
-    # If starts with a digit, prefix with 'c_'
     if cleaned and cleaned[0].isdigit():
         cleaned = f"col_{cleaned}"
         
@@ -42,15 +38,18 @@ def sanitize_identifier(name: str, max_length: int = 60) -> str:
     return cleaned[:max_length]
 
 
-def generate_unique_table_name(original_filename: str) -> str:
+def generate_unique_table_name(original_filename: str, session_id: str | None = None) -> str:
     """
-    Generate a unique, collision-resistant table name in the format:
-    upload_YYYYMMDD_HHMMSS_<sanitized_name>
+    Generate a unique, collision-resistant, session-scoped table name:
+    Format: sess_<session_token>_<timestamp>_<sanitized_name>
     """
     base_name, _ = os.path.splitext(original_filename)
-    safe_base = sanitize_identifier(base_name, max_length=30)
+    safe_base = sanitize_identifier(base_name, max_length=24)
     timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"upload_{timestamp_str}_{safe_base}"
+    if session_id:
+        safe_sess = sanitize_identifier(session_id, max_length=12)
+        return f"sess_{safe_sess}_{timestamp_str}_{safe_base}"[:60]
+    return f"upload_{timestamp_str}_{safe_base}"[:60]
 
 
 def validate_csv_file(uploaded_file) -> tuple[bool, str]:
@@ -61,12 +60,10 @@ def validate_csv_file(uploaded_file) -> tuple[bool, str]:
     if uploaded_file is None:
         return False, "No file provided."
         
-    # Check extension
     filename = getattr(uploaded_file, "name", "")
     if not filename.lower().endswith(".csv"):
         return False, f"Invalid file extension for '{filename}'. Only CSV files (.csv) are supported."
         
-    # Check file size if available
     file_size = getattr(uploaded_file, "size", None)
     if file_size is not None:
         if file_size == 0:
@@ -100,7 +97,6 @@ def profile_dataframe(df: pd.DataFrame) -> dict:
         null_pct = round((null_count / total_rows * 100.0), 2) if total_rows > 0 else 0.0
         unique_count = int(series.nunique(dropna=True))
         
-        # Inferred type classification
         dtype_str = str(series.dtype)
         if pd.api.types.is_numeric_dtype(series):
             if pd.api.types.is_integer_dtype(series):
@@ -150,10 +146,7 @@ def ensure_upload_schema_and_metadata():
     """
     engine = get_engine()
     with engine.begin() as conn:
-        # Create dedicated schema
         conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {UPLOAD_SCHEMA};"))
-        
-        # Create metadata tracking table
         conn.execute(text(f"""
             CREATE TABLE IF NOT EXISTS {UPLOAD_SCHEMA}.{METADATA_TABLE} (
                 upload_id SERIAL PRIMARY KEY,
@@ -163,26 +156,30 @@ def ensure_upload_schema_and_metadata():
                 column_count INTEGER NOT NULL,
                 duplicate_rows INTEGER NOT NULL,
                 file_size_bytes BIGINT,
+                session_id VARCHAR(64),
                 uploaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
         """))
+        # Add session_id column if migrating from older schema
+        conn.execute(text(f"""
+            ALTER TABLE {UPLOAD_SCHEMA}.{METADATA_TABLE} 
+            ADD COLUMN IF NOT EXISTS session_id VARCHAR(64);
+        """))
 
 
-def ingest_csv(file_or_buffer, original_filename: str) -> dict:
+def ingest_csv(file_or_buffer, original_filename: str, session_id: str | None = None) -> dict:
     """
     Complete ingestion pipeline:
     1. Parse CSV into DataFrame.
     2. Profile raw data.
     3. Sanitize column names for safe SQL compatibility.
-    4. Persist to PostgreSQL under uploads.<unique_table_name>.
+    4. Persist to PostgreSQL under uploads.<unique_table_name> with session scoping.
     5. Record entry in uploads._upload_metadata.
     Returns a dictionary of ingestion results and profiling metadata.
     """
     ensure_upload_schema_and_metadata()
     
-    # Read CSV
     try:
-        # Reset buffer pointer if applicable
         if hasattr(file_or_buffer, "seek"):
             file_or_buffer.seek(0)
         df = pd.read_csv(file_or_buffer)
@@ -192,7 +189,6 @@ def ingest_csv(file_or_buffer, original_filename: str) -> dict:
     if df.empty:
         raise ValueError("Uploaded CSV contains no rows.")
         
-    # Profile dataset before modifications
     raw_profile = profile_dataframe(df)
     
     # Deduplicate and sanitize column names
@@ -210,10 +206,9 @@ def ingest_csv(file_or_buffer, original_filename: str) -> dict:
     df_clean = df.copy()
     df_clean.columns = sanitized_cols
     
-    # Generate unique table name
-    target_table = generate_unique_table_name(original_filename)
+    # Generate session-scoped table name
+    target_table = generate_unique_table_name(original_filename, session_id=session_id)
     
-    # Load into PostgreSQL
     engine = get_engine()
     
     # Determine file size
@@ -236,13 +231,13 @@ def ingest_csv(file_or_buffer, original_filename: str) -> dict:
         method="multi"
     )
     
-    # Register metadata
+    # Register metadata with session tracking
     with engine.begin() as conn:
         conn.execute(
             text(f"""
                 INSERT INTO {UPLOAD_SCHEMA}.{METADATA_TABLE} 
-                (table_name, original_filename, row_count, column_count, duplicate_rows, file_size_bytes, uploaded_at)
-                VALUES (:table_name, :original_filename, :row_count, :column_count, :duplicate_rows, :file_size_bytes, CURRENT_TIMESTAMP);
+                (table_name, original_filename, row_count, column_count, duplicate_rows, file_size_bytes, session_id, uploaded_at)
+                VALUES (:table_name, :original_filename, :row_count, :column_count, :duplicate_rows, :file_size_bytes, :session_id, CURRENT_TIMESTAMP);
             """),
             {
                 "table_name": target_table,
@@ -251,6 +246,7 @@ def ingest_csv(file_or_buffer, original_filename: str) -> dict:
                 "column_count": raw_profile["total_cols"],
                 "duplicate_rows": raw_profile["duplicate_rows"],
                 "file_size_bytes": file_size_bytes,
+                "session_id": session_id or "",
             }
         )
         
@@ -259,46 +255,91 @@ def ingest_csv(file_or_buffer, original_filename: str) -> dict:
         "schema": UPLOAD_SCHEMA,
         "table_name": target_table,
         "original_filename": original_filename,
+        "session_id": session_id,
         "profile": raw_profile,
         "preview_df": df_clean.head(100),
     }
 
 
-def get_all_uploaded_tables() -> pd.DataFrame:
+def get_all_uploaded_tables(allowed_tables: list[str] | None = None) -> pd.DataFrame:
     """
-    Fetch all tracked uploads from the metadata table.
+    Fetch tracked uploads from the metadata table.
+    When allowed_tables is provided (session whitelist), strictly filters to return
+    ONLY tables uploaded in the active session. If allowed_tables is empty, returns empty DataFrame.
     """
     ensure_upload_schema_and_metadata()
     engine = get_engine()
-    query = f"""
-        SELECT 
-            upload_id,
-            table_name,
-            original_filename,
-            row_count,
-            column_count,
-            duplicate_rows,
-            ROUND(file_size_bytes / 1024.0, 1) AS size_kb,
-            uploaded_at
-        FROM {UPLOAD_SCHEMA}.{METADATA_TABLE}
-        ORDER BY upload_id DESC;
-    """
+    
+    if allowed_tables is not None:
+        if not allowed_tables:
+            return pd.DataFrame()
+        placeholders = ", ".join([f":t{i}" for i in range(len(allowed_tables))])
+        params = {f"t{i}": name for i, name in enumerate(allowed_tables)}
+        query = f"""
+            SELECT 
+                upload_id,
+                table_name,
+                original_filename,
+                row_count,
+                column_count,
+                duplicate_rows,
+                ROUND(file_size_bytes / 1024.0, 1) AS size_kb,
+                uploaded_at
+            FROM {UPLOAD_SCHEMA}.{METADATA_TABLE}
+            WHERE table_name IN ({placeholders})
+            ORDER BY upload_id DESC;
+        """
+    else:
+        query = f"""
+            SELECT 
+                upload_id,
+                table_name,
+                original_filename,
+                row_count,
+                column_count,
+                duplicate_rows,
+                ROUND(file_size_bytes / 1024.0, 1) AS size_kb,
+                uploaded_at
+            FROM {UPLOAD_SCHEMA}.{METADATA_TABLE}
+            ORDER BY upload_id DESC;
+        """
+        params = {}
+
     try:
         with engine.connect() as conn:
-            return pd.read_sql_query(query, conn)
+            return pd.read_sql_query(text(query), conn, params=params)
     except Exception:
         return pd.DataFrame()
 
 
-def get_uploaded_table_data(table_name: str, limit: int = 100) -> pd.DataFrame:
+def get_uploaded_table_data(table_name: str, limit: int = 100, allowed_tables: list[str] | None = None) -> pd.DataFrame:
     """
     Safely query an uploaded table from the uploads schema.
-    Validates table_name against alphanumeric underscore pattern.
+    Validates table_name against alphanumeric underscore pattern and session access whitelist.
     """
     if not re.match(r"^[a-zA-Z0-9_]+$", table_name):
         raise ValueError("Invalid table identifier.")
+    if allowed_tables is not None and table_name not in allowed_tables:
+        raise PermissionError(f"Access denied: table '{table_name}' does not belong to the current session.")
         
     engine = get_engine()
     query = f'SELECT * FROM "{UPLOAD_SCHEMA}"."{table_name}" LIMIT :limit;'
     with engine.connect() as conn:
         return pd.read_sql_query(text(query), conn, params={"limit": limit})
+
+
+def delete_uploaded_table(table_name: str) -> bool:
+    """
+    Safely drop an uploaded table from the uploads schema and remove its metadata entry.
+    """
+    if not re.match(r"^[a-zA-Z0-9_]+$", table_name):
+        raise ValueError("Invalid table identifier.")
+        
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text(f'DROP TABLE IF EXISTS "{UPLOAD_SCHEMA}"."{table_name}" CASCADE;'))
+        conn.execute(
+            text(f'DELETE FROM "{UPLOAD_SCHEMA}"."{METADATA_TABLE}" WHERE table_name = :table_name;'),
+            {"table_name": table_name}
+        )
+    return True

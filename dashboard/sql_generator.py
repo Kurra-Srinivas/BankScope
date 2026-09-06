@@ -227,6 +227,8 @@ def get_dataset_schema_context(dataset_choice: str) -> dict:
         
     # Dynamic uploaded table from uploads schema
     table_name = dataset_choice.replace("upload:", "").strip()
+    if not re.match(r"^[a-zA-Z0-9_]+$", table_name):
+        raise ValueError("Invalid table identifier.")
     engine = get_engine()
     
     query = """
@@ -307,8 +309,19 @@ Strict Rules:
 """
 
     prompt = f"User Question: {question}\n\nGenerate the corresponding PostgreSQL SELECT query:"
-    
-    raw_response = provider.generate_text(prompt, system_instruction=system_instruction)
+
+    try:
+        raw_response = provider.generate_text(prompt, system_instruction=system_instruction)
+        provider_name = provider.name
+    except Exception as api_err:
+        from dashboard.llm_provider import OfflineBankingSQLProvider
+        if not isinstance(provider, OfflineBankingSQLProvider):
+            fallback_provider = OfflineBankingSQLProvider()
+            raw_response = fallback_provider.generate_text(prompt, system_instruction=system_instruction)
+            provider_name = f"{fallback_provider.name} (Fallback after {provider.name} error)"
+        else:
+            raise api_err
+
     clean_query = clean_sql(raw_response)
     is_valid, validation_msg = validate_sql_security(clean_query)
     
@@ -317,7 +330,7 @@ Strict Rules:
         "dataset_choice": dataset_choice,
         "dataset_name": schema_info["dataset_name"],
         "schema_context": schema_info["context_string"],
-        "provider_name": provider.name,
+        "provider_name": provider_name,
         "raw_response": raw_response,
         "sql": clean_query,
         "is_valid": is_valid,
